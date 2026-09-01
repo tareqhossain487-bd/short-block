@@ -8,27 +8,59 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * Watches YouTube, Facebook, and Instagram for Shorts / Reels screens
- * and automatically triggers GLOBAL_ACTION_BACK when detected.
+ * Watches YouTube, Facebook, and Instagram specifically for FULL-SCREEN Shorts / Reels players
+ * and automatically triggers GLOBAL_ACTION_BACK only when an active short-form player is open.
+ * Home feeds, normal videos, and search results remain fully accessible.
  */
 class ShortsBlockerService : AccessibilityService() {
 
     private lateinit var prefs: SharedPreferences
     private var lastBackActionTimestamp: Long = 0L
 
-    private val shortsKeywords = listOf(
-        "shorts",
+    // Target full-screen shorts/reels player identifiers (excluding home shelves / navigation tabs)
+    private val youtubePlayerIndicators = listOf(
+        "reel_watch_fragment",
+        "reel_player_fragment",
+        "shorts_player_fragment",
         "reel_recycler",
-        "reel_player",
-        "reels_viewer",
-        "reels_tray",
-        "clips_viewer",
-        "reel_watch",
-        "shorts_player",
-        "shorts_container",
-        "reel_video",
-        "reels_tab",
-        "reel_viewer"
+        "shorts_player_view",
+        "reel_player_page",
+        "shorts_video_surface_view",
+        "reel_video_view",
+        "reel_watch_container",
+        "com.google.android.apps.youtube.app.extensions.reel.watch.activity.ReelWatchActivity"
+    )
+
+    private val facebookReelsPlayerIndicators = listOf(
+        "fb_shorts_viewer_fragment",
+        "reels_viewer_fragment",
+        "fb_shorts_full_screen",
+        "reels_video_view_container",
+        "reel_viewer_activity",
+        "reel_viewer_page",
+        "full_screen_video_player_reels"
+    )
+
+    private val instagramReelsPlayerIndicators = listOf(
+        "clips_viewer_fragment",
+        "clips_video_player",
+        "reel_viewer_fragment",
+        "clips_viewer_container",
+        "instagram_reel_viewer"
+    )
+
+    // Elements on home feeds / tabs that should NEVER trigger a block
+    private val ignoredElementKeywords = listOf(
+        "pivot_bar",
+        "bottom_navigation",
+        "tab_bar",
+        "navigation_bar",
+        "shelf_header",
+        "reel_shelf",
+        "shorts_shelf",
+        "feed_unit",
+        "feed_reels_card",
+        "tray_header"
     )
 
     override fun onServiceConnected() {
@@ -48,52 +80,81 @@ class ShortsBlockerService : AccessibilityService() {
 
         val packageName = event.packageName?.toString() ?: return
 
-        // Platform-specific toggle checks
-        val shouldCheck = when {
-            packageName.contains("youtube") -> prefs.getBoolean(PREF_BLOCK_YOUTUBE, true)
-            packageName.contains("facebook") -> prefs.getBoolean(PREF_BLOCK_FACEBOOK, true)
-            packageName.contains("instagram") -> prefs.getBoolean(PREF_BLOCK_INSTAGRAM, true)
-            else -> false
+        val (shouldCheck, appLabel) = when {
+            packageName.contains("youtube") && prefs.getBoolean(PREF_BLOCK_YOUTUBE, true) -> {
+                true to "YouTube Shorts"
+            }
+            (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) &&
+                    prefs.getBoolean(PREF_BLOCK_FACEBOOK, true) -> {
+                true to "Facebook Reels"
+            }
+            packageName.contains("instagram") && prefs.getBoolean(PREF_BLOCK_INSTAGRAM, true) -> {
+                true to "Instagram Reels"
+            }
+            else -> false to ""
         }
 
         if (!shouldCheck) return
 
-        // Throttle back action to prevent infinite back-loops
         val now = SystemClock.elapsedRealtime()
         if (now - lastBackActionTimestamp < THROTTLE_INTERVAL_MS) {
             return
         }
 
         val root: AccessibilityNodeInfo = rootInActiveWindow ?: return
-        if (containsShorts(root)) {
-            val appLabel = when {
-                packageName.contains("youtube") -> "YouTube Shorts"
-                packageName.contains("facebook") -> "Facebook Reels"
-                packageName.contains("instagram") -> "Instagram Reels"
-                else -> "Short Video"
-            }
 
+        val isShortsOpen = when {
+            packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root)
+            packageName.contains("facebook") -> isFacebookReelsPlayerActive(root)
+            packageName.contains("instagram") -> isInstagramReelsPlayerActive(root)
+            else -> false
+        }
+
+        if (isShortsOpen) {
             lastBackActionTimestamp = now
             recordBlockEvent(appLabel, packageName)
             performGlobalAction(GLOBAL_ACTION_BACK)
         }
     }
 
-    private fun containsShorts(node: AccessibilityNodeInfo, depth: Int = 0): Boolean {
-        // Limit recursion depth to prevent any ANR or excessive UI traversal
-        if (depth > 40) return false
+    private fun isYouTubeShortsPlayerActive(root: AccessibilityNodeInfo): Boolean {
+        return hasMatchingPlayerNode(root, youtubePlayerIndicators)
+    }
+
+    private fun isFacebookReelsPlayerActive(root: AccessibilityNodeInfo): Boolean {
+        return hasMatchingPlayerNode(root, facebookReelsPlayerIndicators)
+    }
+
+    private fun isInstagramReelsPlayerActive(root: AccessibilityNodeInfo): Boolean {
+        return hasMatchingPlayerNode(root, instagramReelsPlayerIndicators)
+    }
+
+    private fun hasMatchingPlayerNode(
+        node: AccessibilityNodeInfo,
+        playerIndicators: List<String>,
+        depth: Int = 0
+    ): Boolean {
+        if (depth > 35) return false
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
-        val desc = node.contentDescription?.toString()?.lowercase() ?: ""
-        val text = node.text?.toString()?.lowercase() ?: ""
+        val className = node.className?.toString()?.lowercase() ?: ""
+        val contentDesc = node.contentDescription?.toString()?.lowercase() ?: ""
 
-        if (shortsKeywords.any { viewId.contains(it) || desc.contains(it) || (text.contains(it) && text.length < 30) }) {
+        // Discard items that belong to bottom navigation or feed carousels
+        if (ignoredElementKeywords.any { viewId.contains(it) || contentDesc.contains(it) }) {
+            return false
+        }
+
+        // Check if this node is part of the fullscreen player
+        if (playerIndicators.any { viewId.contains(it) || className.contains(it) }) {
             return true
         }
 
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            if (containsShorts(child, depth + 1)) return true
+            if (hasMatchingPlayerNode(child, playerIndicators, depth + 1)) {
+                return true
+            }
         }
         return false
     }
