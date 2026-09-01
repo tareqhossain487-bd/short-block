@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">ShortsBlocker</string>
+    <string name="accessibility_service_description">Detects YouTube Shorts and Facebook Reels screens and closes them automatically.</string>
+</resources>
