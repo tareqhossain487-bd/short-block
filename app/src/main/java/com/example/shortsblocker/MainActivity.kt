@@ -68,6 +68,19 @@ class MainActivity : ComponentActivity() {
                     onToggleYouTube = { viewModel.setBlockYouTube(it) },
                     onToggleFacebook = { viewModel.setBlockFacebook(it) },
                     onToggleInstagram = { viewModel.setBlockInstagram(it) },
+                    onAddCustomApp = { name, pkg -> viewModel.addCustomApp(name, pkg) },
+                    onToggleCustomApp = { pkg, enabled -> viewModel.toggleCustomApp(pkg, enabled) },
+                    onRemoveCustomApp = { pkg -> viewModel.removeCustomApp(pkg) },
+                    onSetAppSpecificLimits = { appKey, appLimit, shortsLimit ->
+                        viewModel.setAppSpecificLimits(appKey, appLimit, shortsLimit)
+                    },
+                    onResetAppUsage = { appKey -> viewModel.resetAppUsage(appKey) },
+                    onResetShortsUsage = { appKey -> viewModel.resetShortsUsage(appKey) },
+                    onToggleBlockAdult = { viewModel.setBlockAdultWebsites(it) },
+                    onAddCustomWebsite = { viewModel.addCustomWebsite(it) },
+                    onToggleCustomWebsite = { domain, enabled -> viewModel.toggleCustomWebsite(domain, enabled) },
+                    onRemoveCustomWebsite = { viewModel.removeCustomWebsite(it) },
+                    onUpdateReminderMessage = { viewModel.setReminderMessage(it) },
                     onResetStats = { viewModel.resetStats() },
                     onSimulateTest = { viewModel.simulateTestBlock(it) }
                 )
@@ -85,6 +98,17 @@ fun ShortsBlockerApp(
     onToggleYouTube: (Boolean) -> Unit,
     onToggleFacebook: (Boolean) -> Unit,
     onToggleInstagram: (Boolean) -> Unit,
+    onAddCustomApp: (String, String) -> Unit,
+    onToggleCustomApp: (String, Boolean) -> Unit,
+    onRemoveCustomApp: (String) -> Unit,
+    onSetAppSpecificLimits: (String, Int, Int) -> Unit,
+    onResetAppUsage: (String) -> Unit,
+    onResetShortsUsage: (String) -> Unit,
+    onToggleBlockAdult: (Boolean) -> Unit,
+    onAddCustomWebsite: (String) -> Unit,
+    onToggleCustomWebsite: (String, Boolean) -> Unit,
+    onRemoveCustomWebsite: (String) -> Unit,
+    onUpdateReminderMessage: (String) -> Unit,
     onResetStats: () -> Unit,
     onSimulateTest: (String) -> Unit
 ) {
@@ -140,6 +164,7 @@ fun ShortsBlockerApp(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp)
             ) {
+                // 1. Accessibility Service Activation Status
                 item {
                     StatusCard(
                         uiState = uiState,
@@ -148,6 +173,19 @@ fun ShortsBlockerApp(
                     )
                 }
 
+                // 2. Daily Limits: App Limit (e.g. 30m) and Short Limit (e.g. 1m) for each app separately
+                item {
+                    AppAndShortsDailyLimitCard(
+                        uiState = uiState,
+                        onSetAppSpecificLimits = onSetAppSpecificLimits,
+                        onResetAppUsage = onResetAppUsage,
+                        onResetShortsUsage = onResetShortsUsage,
+                        onToggleCustomApp = onToggleCustomApp,
+                        onRemoveCustomApp = onRemoveCustomApp
+                    )
+                }
+
+                // 3. Stats & Time Saved Dashboard
                 item {
                     StatsDashboard(
                         uiState = uiState,
@@ -155,15 +193,32 @@ fun ShortsBlockerApp(
                     )
                 }
 
+                // 4. Target Platforms & Installed App Picker (with Search)
                 item {
                     PlatformToggles(
                         uiState = uiState,
                         onToggleYouTube = onToggleYouTube,
                         onToggleFacebook = onToggleFacebook,
-                        onToggleInstagram = onToggleInstagram
+                        onToggleInstagram = onToggleInstagram,
+                        onAddCustomApp = onAddCustomApp,
+                        onToggleCustomApp = onToggleCustomApp,
+                        onRemoveCustomApp = onRemoveCustomApp
                     )
                 }
 
+                // 5. Adult & Porn Site Blocker + Add New Website Option + Custom Reminder
+                item {
+                    AdultAndWebsiteBlockerCard(
+                        uiState = uiState,
+                        onToggleBlockAdult = onToggleBlockAdult,
+                        onAddCustomWebsite = onAddCustomWebsite,
+                        onToggleCustomWebsite = onToggleCustomWebsite,
+                        onRemoveCustomWebsite = onRemoveCustomWebsite,
+                        onUpdateReminderMessage = onUpdateReminderMessage
+                    )
+                }
+
+                // 6. Recent Blocking History & Test Simulator
                 item {
                     RecentActivityCard(
                         events = uiState.recentEvents,
@@ -171,6 +226,7 @@ fun ShortsBlockerApp(
                     )
                 }
 
+                // 7. Setup & Accessibility Step-by-Step Guide
                 item {
                     SetupGuideCard(
                         onOpenSettings = onOpenAccessibilitySettings

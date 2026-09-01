@@ -16,7 +16,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.shortsblocker.ShortsBlockerUiState
 import com.example.shortsblocker.ui.theme.EmeraldSuccess
 import com.example.shortsblocker.ui.theme.IndigoPrimary
@@ -156,7 +155,7 @@ fun StatsDashboard(
                 }
             }
 
-            // Platform breakdown
+            // Platform & Website breakdown
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -172,6 +171,10 @@ fun StatsDashboard(
                 PlatformStatItem(
                     label = "Instagram",
                     count = uiState.instagramBlockedCount
+                )
+                PlatformStatItem(
+                    label = "Websites",
+                    count = uiState.websiteBlockedCount
                 )
             }
         }
