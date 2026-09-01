@@ -499,6 +499,25 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
                 } else null
             }
 
+        val customAppsStr = prefs.getString(ShortsBlockerService.PREF_CUSTOM_APPS, "") ?: ""
+        val customApps = customAppsStr.split(";")
+            .filter { it.isNotBlank() }
+            .mapNotNull { entry ->
+                val parts = entry.split("#")
+                if (parts.size >= 3) {
+                    val pkg = parts[1]
+                    val appLimit = prefs.getInt("app_limit_$pkg", if (parts.size >= 4) parts[3].toIntOrNull() ?: 0 else 0)
+                    val appUsed = prefs.getLong("app_used_sec_$pkg", 0L)
+                    CustomApp(
+                        name = parts[0],
+                        packageName = pkg,
+                        isEnabled = parts[2].toBoolean(),
+                        dailyLimitMinutes = appLimit,
+                        todayUsedSeconds = appUsed
+                    )
+                } else null
+            }
+
         _uiState.update {
             it.copy(
                 totalBlockedCount = total,
@@ -511,6 +530,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
                 youtubeLimits = it.youtubeLimits.copy(appTodayUsedSeconds = ytAppUsed, shortsTodayUsedSeconds = ytShortsUsed),
                 facebookLimits = it.facebookLimits.copy(appTodayUsedSeconds = fbAppUsed, shortsTodayUsedSeconds = fbShortsUsed),
                 instagramLimits = it.instagramLimits.copy(appTodayUsedSeconds = igAppUsed, shortsTodayUsedSeconds = igShortsUsed),
+                customApps = customApps,
                 recentEvents = events
             )
         }

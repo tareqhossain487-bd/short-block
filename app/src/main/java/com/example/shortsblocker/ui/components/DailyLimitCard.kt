@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.shortsblocker.AppLimitConfig
 import com.example.shortsblocker.CustomApp
@@ -205,40 +206,52 @@ fun AppAndShortsDailyLimitCard(
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Title badge
+                    // Title badge with proper spacing so text never breaks vertically
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "${currentConfig.displayName} লিমিট ও ব্যবহার",
+                            text = "${currentConfig.displayName} লিমিট সেটিংস",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
-                            color = primaryThemeColor
+                            color = primaryThemeColor,
+                            modifier = Modifier.weight(1f, fill = false),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
+
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         Surface(
                             color = primaryThemeColor.copy(alpha = 0.15f),
                             shape = RoundedCornerShape(6.dp)
                         ) {
+                            val shortsStatus = when (currentConfig.shortsLimitMinutes) {
+                                -1 -> "Unlimited"
+                                0 -> "Block (Off)"
+                                else -> "${currentConfig.shortsLimitMinutes}m"
+                            }
                             Text(
                                 text = if (isCustomSelected) {
                                     "Limit: ${if (currentConfig.appLimitMinutes == 0) "Unlimited" else "${currentConfig.appLimitMinutes}m"}"
                                 } else {
-                                    "App: ${if (currentConfig.appLimitMinutes == 0) "Unlimited" else "${currentConfig.appLimitMinutes}m"} | Shorts: ${if (currentConfig.shortsLimitMinutes == 0) "Strict" else "${currentConfig.shortsLimitMinutes}m"}"
+                                    "App: ${if (currentConfig.appLimitMinutes == 0) "Unlimited" else "${currentConfig.appLimitMinutes}m"} | Shorts: $shortsStatus"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = primaryThemeColor,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
                         }
                     }
 
                     // 1. App Limit Section (with prominent Progress bar and Usage indicator)
                     AppLimitSubSection(
-                        title = "1. App Limit (মোট অ্যাপ ব্যবহারের সময়)",
+                        title = "1. App Limit (মোট ব্যবহারের সময়)",
                         description = if (currentConfig.appLimitMinutes == 0) {
                             "Unlimited: সারাদিনে যতক্ষণ ইচ্ছা অ্যাপ ব্যবহার করা যাবে।"
                         } else {
@@ -271,17 +284,18 @@ fun AppAndShortsDailyLimitCard(
                         )
 
                         AppLimitSubSection(
-                            title = "2. Short Limit (শর্টস / রিলসের সময়সীমা)",
-                            description = if (currentConfig.shortsLimitMinutes == 0) {
-                                "Strict Block (0 min): কোনো শর্টস/রিলস চলবে না, ওপেন করলেই সাথে সাথে বন্ধ হবে।"
-                            } else {
-                                "দৈনিক ${currentConfig.shortsLimitMinutes} মিনিট শর্টস দেখতে পারবেন। সময় শেষ হলে শুধুমাত্র শর্টস ব্লক হবে (বড় ভিডিও চলবে)।"
+                            title = "2. Short Limit (শর্টস/রিলসের সময়)",
+                            description = when (currentConfig.shortsLimitMinutes) {
+                                -1 -> "Unlimited: শর্টস বা রিলস ইচ্ছেমতো দেখা যাবে, কোনো ব্লকিং হবে না।"
+                                0 -> "Block (Off): শর্টস/রিলস সম্পূর্ণ বন্ধ (Off)। ওপেন করলেই সাথে সাথে ব্লক হবে।"
+                                else -> "দৈনিক ${currentConfig.shortsLimitMinutes} মিনিট শর্টস দেখতে পারবেন। সময় শেষ হলে শুধুমাত্র শর্টস ব্লক হবে (বড় ভিডিও চলবে)।"
                             },
                             icon = Icons.Default.PlayArrow,
                             limitMinutes = currentConfig.shortsLimitMinutes,
                             usedSeconds = currentConfig.shortsTodayUsedSeconds,
                             presets = listOf(
-                                0 to "Strict (0m)",
+                                -1 to "Unlimited",
+                                0 to "Block (Off)",
                                 1 to "1 min",
                                 3 to "3 min",
                                 5 to "5 min",
@@ -385,13 +399,17 @@ fun AppAndShortsDailyLimitCard(
                                                 text = customApp.name,
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.onSurface
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = "আজ ব্যবহার হয়েছে: ${usedMins}m ${usedSecs}s" +
+                                                text = "আজ ব্যবহার: ${usedMins}m ${usedSecs}s" +
                                                         if (hasLimit) " / ${customApp.dailyLimitMinutes}m" else " (Unlimited)",
                                                 style = MaterialTheme.typography.bodySmall,
-                                                color = if (isLimitExceeded) RoseError else MaterialTheme.colorScheme.onSurfaceVariant
+                                                color = if (isLimitExceeded) RoseError else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                softWrap = false
                                             )
                                         }
                                     }
@@ -483,12 +501,30 @@ private fun AppLimitSubSection(
     var customInputText by remember { mutableStateOf("") }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Section Header Row: Left title (weighted) and Right status badge (non-breaking)
+        val isShorts = tagPrefix.contains("shorts")
+        val badgeText = when {
+            isShorts && limitMinutes == -1 -> "Unlimited"
+            isShorts && limitMinutes == 0 -> "Block (Off)"
+            !isShorts && limitMinutes == 0 -> "Unlimited"
+            isExceeded -> "Limit Reached"
+            else -> "${(limitMinutes - usedMinutes).coerceAtLeast(0)}m left"
+        }
+        val badgeColor = when {
+            isShorts && limitMinutes == -1 -> EmeraldSuccess
+            isShorts && limitMinutes == 0 -> RoseError
+            !isShorts && limitMinutes == 0 -> EmeraldSuccess
+            isExceeded -> RoseError
+            else -> EmeraldSuccess
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
+                modifier = Modifier.weight(1f, fill = false),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -502,35 +538,26 @@ private fun AppLimitSubSection(
                     text = title,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
+            Spacer(modifier = Modifier.width(8.dp))
+
             Surface(
-                color = when {
-                    limitMinutes == 0 && tagPrefix.contains("shorts") -> RoseError.copy(alpha = 0.15f)
-                    limitMinutes == 0 -> EmeraldSuccess.copy(alpha = 0.15f)
-                    isExceeded -> RoseError.copy(alpha = 0.15f)
-                    else -> EmeraldSuccess.copy(alpha = 0.15f)
-                },
+                color = badgeColor.copy(alpha = 0.15f),
                 shape = RoundedCornerShape(6.dp)
             ) {
                 Text(
-                    text = when {
-                        limitMinutes == 0 && tagPrefix.contains("shorts") -> "Strict (0m)"
-                        limitMinutes == 0 -> "Unlimited"
-                        isExceeded -> "Limit Reached"
-                        else -> "${(limitMinutes - usedMinutes).coerceAtLeast(0)}m left"
-                    },
+                    text = badgeText,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
-                    color = when {
-                        limitMinutes == 0 && tagPrefix.contains("shorts") -> RoseError
-                        limitMinutes == 0 -> EmeraldSuccess
-                        isExceeded -> RoseError
-                        else -> EmeraldSuccess
-                    },
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    color = badgeColor,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                 )
             }
         }
@@ -560,23 +587,33 @@ private fun AppLimitSubSection(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f, fill = false)
                     ) {
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(if (usedSeconds > 0) accentColor else MaterialTheme.colorScheme.outline)
+                                .background(
+                                    when {
+                                        isShorts && limitMinutes == 0 -> RoseError
+                                        usedSeconds > 0 -> accentColor
+                                        else -> MaterialTheme.colorScheme.outline
+                                    }
+                                )
                         )
                         Text(
-                            text = if (limitMinutes > 0) {
-                                "আজ ব্যবহার হয়েছে: ${usedMinutes}m ${usedSecondsRemainder}s / ${limitMinutes}m"
-                            } else {
-                                "আজ মোট ব্যবহার: ${usedMinutes} মিনিট ${usedSecondsRemainder} সেকেন্ড"
+                            text = when {
+                                isShorts && limitMinutes == 0 -> "স্ট্যাটাস: শর্টস সম্পূর্ণ বন্ধ (Block / Off)"
+                                isShorts && limitMinutes == -1 -> "আজ শর্টস ব্যবহার: ${usedMinutes}m ${usedSecondsRemainder}s (Unlimited)"
+                                limitMinutes > 0 -> "আজ ব্যবহার: ${usedMinutes}m ${usedSecondsRemainder}s / ${limitMinutes}m"
+                                else -> "আজ মোট ব্যবহার: ${usedMinutes}m ${usedSecondsRemainder}s (Unlimited)"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
 
@@ -585,7 +622,9 @@ private fun AppLimitSubSection(
                             text = "${(progress * 100).toInt()}%",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = if (isExceeded) RoseError else accentColor
+                            color = if (isExceeded) RoseError else accentColor,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
@@ -620,7 +659,9 @@ private fun AppLimitSubSection(
                         Text(
                             text = label,
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     },
                     leadingIcon = if (isSelected) {
@@ -647,7 +688,9 @@ private fun AppLimitSubSection(
                     Text(
                         text = if (isCustomActive) "Custom (${limitMinutes}m)" else "Custom...",
                         style = MaterialTheme.typography.labelSmall,
-                        fontWeight = if (isCustomActive) FontWeight.Bold else FontWeight.Normal
+                        fontWeight = if (isCustomActive) FontWeight.Bold else FontWeight.Normal,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 },
                 leadingIcon = {
@@ -668,7 +711,9 @@ private fun AppLimitSubSection(
                         text = "Reset",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
-                        color = RoseError
+                        color = RoseError,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 },
                 leadingIcon = {

@@ -15,16 +15,26 @@ import java.util.Locale
 
 /**
  * Accessibility service that:
- * 1. Blocks Shorts/Reels on YouTube, Facebook, and Instagram (with dedicated per-app Shorts limits, e.g. 1 min).
- * 2. Monitors dedicated per-app overall screen-time limits (e.g. YouTube app limit 30 mins, Facebook 30 mins).
- * 3. Detects and blocks adult/porn websites and custom added domains inside web browsers,
- *    displaying a toast or overlay message (default: "আল্লাহর দিকে ফিরে আসো" or custom user message).
+ * 1. Tracks exact per-second usage of monitored apps (YouTube, Facebook, Instagram, Custom apps)
+ *    using a reliable 1-second ticker even when full-screen videos are playing passively.
+ * 2. Immediately closes (GLOBAL_ACTION_HOME) the app when its App Limit is reached.
+ * 3. Detects and blocks Shorts/Reels when the dedicated Short Limit is reached, or instantly if Block (0m/Off).
+ *    If Short Limit is -1 (Unlimited), shorts are allowed without blocking.
+ * 4. Detects and blocks adult/porn websites and custom added domains inside web browsers.
  */
 class ShortsBlockerService : AccessibilityService() {
 
     private lateinit var prefs: SharedPreferences
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private var lastBackActionTimestamp: Long = 0L
+    private var lastHomeActionTimestamp: Long = 0L
     private var lastToastTimestamp: Long = 0L
+
+    @Volatile
+    private var activeForegroundPackage: String = ""
+    @Volatile
+    private var lastPackageEventTime: Long = 0L
 
     // Adult keywords and popular porn domain substrings
     private val adultKeywords = listOf(
@@ -95,18 +105,168 @@ class ShortsBlockerService : AccessibilityService() {
         "tray_header"
     )
 
-    private var lastShortsActiveTime: Long = 0L
-    private var lastAppActiveTime: Long = 0L
-    private var currentActivePackage: String = ""
+    // 1-second continuous foreground ticker to ensure time tracking always happens
+    // even during long video playback where no accessibility events are triggered
+    private val tickerRunnable = object : Runnable {
+        override fun run() {
+            try {
+                onTickerTick()
+            } catch (_: Exception) {
+            }
+            mainHandler.postDelayed(this, 1000L)
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         checkAndResetDailyUsage()
+        mainHandler.removeCallbacks(tickerRunnable)
+        mainHandler.post(tickerRunnable)
     }
 
     override fun onInterrupt() {
-        // Handle accessibility service interruption
+        mainHandler.removeCallbacks(tickerRunnable)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        mainHandler.removeCallbacks(tickerRunnable)
+    }
+
+    private fun getTrackedAppInfo(pkg: String): TrackedAppInfo? {
+        if (pkg.isBlank()) return null
+        if (!::prefs.isInitialized) {
+            prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        }
+
+        val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
+        if (!isMasterEnabled) return null
+
+        return when {
+            pkg.contains("youtube") && prefs.getBoolean(PREF_BLOCK_YOUTUBE, true) -> {
+                TrackedAppInfo(appKey = "youtube", appLabel = "YouTube", packageName = pkg, isCustomApp = false)
+            }
+            (pkg.contains("facebook.katana") || pkg.contains("facebook.lite")) &&
+                    prefs.getBoolean(PREF_BLOCK_FACEBOOK, true) -> {
+                TrackedAppInfo(appKey = "facebook", appLabel = "Facebook", packageName = pkg, isCustomApp = false)
+            }
+            pkg.contains("instagram") && prefs.getBoolean(PREF_BLOCK_INSTAGRAM, true) -> {
+                TrackedAppInfo(appKey = "instagram", appLabel = "Instagram", packageName = pkg, isCustomApp = false)
+            }
+            else -> {
+                val customAppsStr = prefs.getString(PREF_CUSTOM_APPS, "") ?: ""
+                val matchingCustom = customAppsStr.split(";")
+                    .filter { it.isNotBlank() }
+                    .mapNotNull {
+                        val parts = it.split("#")
+                        if (parts.size >= 3) Triple(parts[0], parts[1], parts[2].toBoolean()) else null
+                    }
+                    .firstOrNull { (_, customPkg, isEnabled) ->
+                        isEnabled && (pkg.equals(customPkg, ignoreCase = true) || pkg.contains(customPkg, ignoreCase = true))
+                    }
+
+                if (matchingCustom != null) {
+                    TrackedAppInfo(
+                        appKey = matchingCustom.second,
+                        appLabel = matchingCustom.first,
+                        packageName = matchingCustom.second,
+                        isCustomApp = true
+                    )
+                } else null
+            }
+        }
+    }
+
+    /**
+     * Executes every 1 second to reliably record seconds used and enforce limits
+     */
+    private fun onTickerTick() {
+        if (!::prefs.isInitialized) {
+            prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        }
+
+        checkAndResetDailyUsage()
+
+        val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
+        if (!isMasterEnabled) return
+
+        val root = try { rootInActiveWindow } catch (_: Exception) { null }
+        val rootPkg = root?.packageName?.toString() ?: ""
+        val now = SystemClock.elapsedRealtime()
+
+        val currentPkg = when {
+            rootPkg.isNotBlank() -> rootPkg
+            (now - lastPackageEventTime) < 4000L -> activeForegroundPackage
+            else -> ""
+        }
+
+        if (currentPkg.isBlank()) return
+
+        val trackedApp = getTrackedAppInfo(currentPkg) ?: return
+        val appKey = trackedApp.appKey
+        val appLabel = trackedApp.appLabel
+
+        // 1. Increment this app's daily used seconds
+        val appPrefLimitKey = "app_limit_$appKey"
+        val appPrefUsedKey = "app_used_sec_$appKey"
+        val appLimitMinutes = prefs.getInt(appPrefLimitKey, 0)
+        val currentAppUsed = prefs.getLong(appPrefUsedKey, 0L) + 1L
+        prefs.edit().putLong(appPrefUsedKey, currentAppUsed).apply()
+
+        // 2. Check if App Limit is exceeded
+        if (appLimitMinutes > 0 && currentAppUsed >= (appLimitMinutes * 60L)) {
+            if (now - lastHomeActionTimestamp >= 1500L) {
+                lastHomeActionTimestamp = now
+                showAppLimitToast(appLabel, appLimitMinutes)
+                recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", currentPkg)
+                // Kick out of app to Home screen immediately
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+            return
+        }
+
+        // 3. If it's YouTube / Facebook / Instagram, track Shorts / Reels time
+        if (!trackedApp.isCustomApp && root != null) {
+            val isShortsOpen = when (appKey) {
+                "youtube" -> isYouTubeShortsPlayerActive(root)
+                "facebook" -> isFacebookReelsPlayerActive(root)
+                "instagram" -> isInstagramReelsPlayerActive(root)
+                else -> false
+            }
+
+            if (isShortsOpen) {
+                val shortsPrefLimitKey = "shorts_limit_$appKey"
+                val shortsPrefUsedKey = "shorts_used_sec_$appKey"
+                val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0) // -1: Unlimited, 0: Block (Off), >0: Mins
+
+                val currentShortsUsed = prefs.getLong(shortsPrefUsedKey, 0L) + 1L
+                prefs.edit().putLong(shortsPrefUsedKey, currentShortsUsed).apply()
+
+                // If shortsLimitMinutes == -1 (Unlimited), do NOT block.
+                // If shortsLimitMinutes == 0 (Block/Off), block immediately.
+                // If shortsLimitMinutes > 0, block when used >= limit.
+                if (shortsLimitMinutes != -1 && (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L))) {
+                    if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
+                        lastBackActionTimestamp = now
+                        val shortLabel = when (appKey) {
+                            "youtube" -> "YouTube Shorts"
+                            "facebook" -> "Facebook Reels"
+                            "instagram" -> "Instagram Reels"
+                            else -> appLabel
+                        }
+                        if (shortsLimitMinutes > 0) {
+                            showShortsLimitToast(shortLabel, shortsLimitMinutes)
+                        } else {
+                            showShortsStrictBlockToast(shortLabel)
+                        }
+                        recordBlockEvent(shortLabel, currentPkg)
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                    }
+                }
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -122,6 +282,12 @@ class ShortsBlockerService : AccessibilityService() {
 
         val packageName = event.packageName?.toString() ?: return
 
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            activeForegroundPackage = packageName
+            lastPackageEventTime = SystemClock.elapsedRealtime()
+        }
+
         // 1. Check if event is in a Web Browser for Adult/Porn Sites or Custom Blocked Domains
         val isBrowser = browserPackages.any { packageName.contains(it, ignoreCase = true) }
         if (isBrowser) {
@@ -129,74 +295,26 @@ class ShortsBlockerService : AccessibilityService() {
             return
         }
 
-        // 2. Check for Social Platforms & Custom Installed Apps
-        val (shouldCheck, appKey, appLabel, isCustomApp) = when {
-            packageName.contains("youtube") && prefs.getBoolean(PREF_BLOCK_YOUTUBE, true) -> {
-                Quadruple(true, "youtube", "YouTube", false)
-            }
-            (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) &&
-                    prefs.getBoolean(PREF_BLOCK_FACEBOOK, true) -> {
-                Quadruple(true, "facebook", "Facebook", false)
-            }
-            packageName.contains("instagram") && prefs.getBoolean(PREF_BLOCK_INSTAGRAM, true) -> {
-                Quadruple(true, "instagram", "Instagram", false)
-            }
-            else -> {
-                val customAppsStr = prefs.getString(PREF_CUSTOM_APPS, "") ?: ""
-                val matchingCustom = customAppsStr.split(";")
-                    .filter { it.isNotBlank() }
-                    .mapNotNull {
-                        val parts = it.split("#")
-                        if (parts.size >= 3) Triple(parts[0], parts[1], parts[2].toBoolean()) else null
-                    }
-                    .firstOrNull { (_, pkg, isEnabled) ->
-                        isEnabled && (packageName.equals(pkg, ignoreCase = true) || packageName.contains(pkg, ignoreCase = true))
-                    }
-
-                if (matchingCustom != null) {
-                    Quadruple(true, matchingCustom.second, matchingCustom.first, true)
-                } else {
-                    Quadruple(false, "", "", false)
-                }
-            }
-        }
-
-        if (!shouldCheck) {
-            lastAppActiveTime = 0L
-            return
-        }
+        // 2. Check for Tracked Apps
+        val trackedApp = getTrackedAppInfo(packageName) ?: return
+        val appKey = trackedApp.appKey
+        val appLabel = trackedApp.appLabel
+        val isCustomApp = trackedApp.isCustomApp
 
         val now = SystemClock.elapsedRealtime()
 
-        // Track General App Usage Time for this specific App (e.g. YouTube, Facebook, Instagram)
-        val appPrefLimitKey = "app_limit_$appKey"
-        val appPrefUsedKey = "app_used_sec_$appKey"
-
-        val appLimitMinutes = prefs.getInt(appPrefLimitKey, 0)
-        val todayAppUsedSeconds = prefs.getLong(appPrefUsedKey, 0L)
-
-        if (lastAppActiveTime > 0L && currentActivePackage == packageName) {
-            val deltaSec = (now - lastAppActiveTime) / 1000L
-            if (deltaSec in 1..5) {
-                val newAppUsed = todayAppUsedSeconds + deltaSec
-                prefs.edit().putLong(appPrefUsedKey, newAppUsed).apply()
+        // Immediate check: If this app's App Limit is already exceeded, kick user out to Home
+        val appLimitMinutes = prefs.getInt("app_limit_$appKey", 0)
+        val todayAppUsedSeconds = prefs.getLong("app_used_sec_$appKey", 0L)
+        if (appLimitMinutes > 0 && todayAppUsedSeconds >= (appLimitMinutes * 60L)) {
+            if (now - lastHomeActionTimestamp >= 1200L) {
+                lastHomeActionTimestamp = now
+                showAppLimitToast(appLabel, appLimitMinutes)
+                recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", packageName)
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                performGlobalAction(GLOBAL_ACTION_BACK)
             }
-        }
-        lastAppActiveTime = now
-        currentActivePackage = packageName
-
-        // If this specific app's screen time limit is set (> 0) and exceeded, block app access
-        if (appLimitMinutes > 0) {
-            val currentAppUsed = prefs.getLong(appPrefUsedKey, 0L)
-            if (currentAppUsed >= appLimitMinutes * 60L) {
-                if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
-                    lastBackActionTimestamp = now
-                    showAppLimitToast(appLabel, appLimitMinutes)
-                    recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", packageName)
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                }
-                return
-            }
+            return
         }
 
         val root: AccessibilityNodeInfo = rootInActiveWindow ?: return
@@ -212,43 +330,28 @@ class ShortsBlockerService : AccessibilityService() {
         if (isShortsOpen) {
             val shortsPrefLimitKey = "shorts_limit_$appKey"
             val shortsPrefUsedKey = "shorts_used_sec_$appKey"
-
             val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0)
             val todayShortsUsedSeconds = prefs.getLong(shortsPrefUsedKey, 0L)
 
-            if (shortsLimitMinutes > 0) {
-                if (lastShortsActiveTime > 0L) {
-                    val deltaSeconds = (now - lastShortsActiveTime) / 1000L
-                    if (deltaSeconds in 1..5) {
-                        val newUsed = todayShortsUsedSeconds + deltaSeconds
-                        prefs.edit().putLong(shortsPrefUsedKey, newUsed).apply()
+            // -1 = Unlimited (no block), 0 = Block (Off), > 0 = time limit
+            if (shortsLimitMinutes != -1 && (shortsLimitMinutes == 0 || todayShortsUsedSeconds >= (shortsLimitMinutes * 60L))) {
+                if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
+                    lastBackActionTimestamp = now
+                    val shortLabel = when (appKey) {
+                        "youtube" -> "YouTube Shorts"
+                        "facebook" -> "Facebook Reels"
+                        "instagram" -> "Instagram Reels"
+                        else -> appLabel
                     }
+                    if (shortsLimitMinutes > 0) {
+                        showShortsLimitToast(shortLabel, shortsLimitMinutes)
+                    } else {
+                        showShortsStrictBlockToast(shortLabel)
+                    }
+                    recordBlockEvent(shortLabel, packageName)
+                    performGlobalAction(GLOBAL_ACTION_BACK)
                 }
-                lastShortsActiveTime = now
-
-                val updatedUsed = prefs.getLong(shortsPrefUsedKey, 0L)
-                val limitSeconds = shortsLimitMinutes * 60L
-
-                if (updatedUsed < limitSeconds) {
-                    return
-                }
             }
-
-            if (now - lastBackActionTimestamp < THROTTLE_INTERVAL_MS) {
-                return
-            }
-
-            lastBackActionTimestamp = now
-            val shortLabel = when (appKey) {
-                "youtube" -> "YouTube Shorts"
-                "facebook" -> "Facebook Reels"
-                "instagram" -> "Instagram Reels"
-                else -> appLabel
-            }
-            recordBlockEvent(shortLabel, packageName)
-            performGlobalAction(GLOBAL_ACTION_BACK)
-        } else {
-            lastShortsActiveTime = 0L
         }
     }
 
@@ -320,14 +423,43 @@ class ShortsBlockerService : AccessibilityService() {
 
     private fun showAppLimitToast(appName: String, limitMinutes: Int) {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastToastTimestamp < 2000L) return
+        if (now - lastToastTimestamp < 2500L) return
         lastToastTimestamp = now
 
         Handler(Looper.getMainLooper()).post {
             Toast.makeText(
                 applicationContext,
-                "⏳ $appName এর আজকের সময়সীমা ($limitMinutes মিনিট) শেষ হয়েছে!",
+                "⏳ $appName এর আজকের সময়সীমা ($limitMinutes মিনিট) শেষ হয়েছে! অ্যাপ বন্ধ করা হয়েছে।",
                 Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun showShortsLimitToast(shortLabel: String, limitMinutes: Int) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastToastTimestamp < 2500L) return
+        lastToastTimestamp = now
+
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(
+                applicationContext,
+                "⏳ $shortLabel এর দৈনিক সময়সীমা ($limitMinutes মিনিট) শেষ হয়েছে!",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun showShortsStrictBlockToast(shortLabel: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastToastTimestamp < 2500L) return
+        lastToastTimestamp = now
+
+        val customMsg = prefs.getString(PREF_REMINDER_MESSAGE, DEFAULT_REMINDER_MESSAGE) ?: DEFAULT_REMINDER_MESSAGE
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(
+                applicationContext,
+                "🚫 $shortLabel সম্পূর্ণ বন্ধ (Block / Off)! $customMsg",
+                Toast.LENGTH_SHORT
             ).show()
         }
     }
@@ -337,11 +469,19 @@ class ShortsBlockerService : AccessibilityService() {
         val savedDate = prefs.getString(PREF_TODAY_DATE, "") ?: ""
         if (savedDate != todayStr) {
             val editor = prefs.edit().putString(PREF_TODAY_DATE, todayStr)
-            // Reset all apps usage
+            // Reset built-in apps usage
             val apps = listOf("youtube", "facebook", "instagram")
             apps.forEach { appKey ->
                 editor.putLong("app_used_sec_$appKey", 0L)
                 editor.putLong("shorts_used_sec_$appKey", 0L)
+            }
+            // Reset custom apps usage
+            val customAppsStr = prefs.getString(PREF_CUSTOM_APPS, "") ?: ""
+            customAppsStr.split(";").filter { it.isNotBlank() }.forEach {
+                val parts = it.split("#")
+                if (parts.size >= 2) {
+                    editor.putLong("app_used_sec_${parts[1]}", 0L)
+                }
             }
             editor.apply()
         }
@@ -447,4 +587,9 @@ class ShortsBlockerService : AccessibilityService() {
     }
 }
 
-data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+data class TrackedAppInfo(
+    val appKey: String,
+    val appLabel: String,
+    val packageName: String,
+    val isCustomApp: Boolean
+)
