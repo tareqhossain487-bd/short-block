@@ -76,7 +76,7 @@ class ShortsBlockerService : AccessibilityService() {
         "com.mi.globalbrowser"
     )
 
-    // Full-screen shorts/reels player identifiers
+    // Full-screen shorts/reels player identifiers and keywords
     private val youtubePlayerIndicators = listOf(
         "reel_watch_fragment",
         "reel_player_fragment",
@@ -87,7 +87,38 @@ class ShortsBlockerService : AccessibilityService() {
         "shorts_video_surface_view",
         "reel_video_view",
         "reel_watch_container",
-        "com.google.android.apps.youtube.app.extensions.reel.watch.activity.ReelWatchActivity"
+        "shorts_container",
+        "shorts_root",
+        "reel_root",
+        "shorts_main_container",
+        "shorts_player_surface",
+        "reel_player_overlay",
+        "reel_player_video_link",
+        "reel_player_creator_avatar",
+        "reel_player_like_button",
+        "reel_player_dislike_button",
+        "reel_player_comment_button",
+        "reel_player_share_button",
+        "reel_player_remix_button",
+        "reel_player_sound_button",
+        "shorts_sound_title",
+        "shorts_pivot_button",
+        "shorts_camera_button",
+        "shorts_remix_button",
+        "reel_item_player",
+        "reel_watch_view",
+        "reelwatchactivity",
+        "shortsactivity"
+    )
+
+    private val youtubeShortsTextKeywords = listOf(
+        "dislike this short",
+        "like this short",
+        "remix this short",
+        "sound used in this short",
+        "remix with this sound",
+        "use this sound",
+        "original sound - "
     )
 
     private val facebookReelsPlayerIndicators = listOf(
@@ -97,7 +128,10 @@ class ShortsBlockerService : AccessibilityService() {
         "reels_video_view_container",
         "reel_viewer_activity",
         "reel_viewer_page",
-        "full_screen_video_player_reels"
+        "full_screen_video_player_reels",
+        "fb_shorts",
+        "reelsvieweractivity",
+        "fbshortsactivity"
     )
 
     private val instagramReelsPlayerIndicators = listOf(
@@ -105,20 +139,12 @@ class ShortsBlockerService : AccessibilityService() {
         "clips_video_player",
         "reel_viewer_fragment",
         "clips_viewer_container",
-        "instagram_reel_viewer"
-    )
-
-    private val ignoredElementKeywords = listOf(
-        "pivot_bar",
-        "bottom_navigation",
-        "tab_bar",
-        "navigation_bar",
-        "shelf_header",
-        "reel_shelf",
-        "shorts_shelf",
-        "feed_unit",
-        "feed_reels_card",
-        "tray_header"
+        "instagram_reel_viewer",
+        "clips_video_container",
+        "clips_action_bar",
+        "clips_author_container",
+        "clips_camera",
+        "clipsvieweractivity"
     )
 
     // 1-second continuous foreground ticker to ensure time tracking always happens
@@ -131,6 +157,14 @@ class ShortsBlockerService : AccessibilityService() {
             }
             mainHandler.postDelayed(this, 1000L)
         }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        checkAndResetDailyUsage()
+        mainHandler.removeCallbacks(tickerRunnable)
+        mainHandler.post(tickerRunnable)
     }
 
     override fun onServiceConnected() {
@@ -310,8 +344,11 @@ class ShortsBlockerService : AccessibilityService() {
         }
 
         // 2. Try auto-skipping video ads if enabled
-        val root: AccessibilityNodeInfo = rootInActiveWindow ?: return
-        tryAutoSkipAds(root, packageName)
+        val eventClassName = event.className?.toString() ?: ""
+        val root: AccessibilityNodeInfo? = rootInActiveWindow ?: event.source
+        if (root != null) {
+            tryAutoSkipAds(root, packageName)
+        }
 
         // 3. Check for Tracked Apps
         val trackedApp = getTrackedAppInfo(packageName) ?: return
@@ -337,9 +374,12 @@ class ShortsBlockerService : AccessibilityService() {
 
         val isShortsOpen = when {
             isCustomApp -> true
-            packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root)
-            packageName.contains("facebook") -> isFacebookReelsPlayerActive(root)
-            packageName.contains("instagram") -> isInstagramReelsPlayerActive(root)
+            root != null && packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root, eventClassName)
+            root != null && (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) -> isFacebookReelsPlayerActive(root, eventClassName)
+            root != null && packageName.contains("instagram") -> isInstagramReelsPlayerActive(root, eventClassName)
+            packageName.contains("youtube") && (eventClassName.contains("ReelWatchActivity", ignoreCase = true) || eventClassName.contains("ShortsActivity", ignoreCase = true)) -> true
+            packageName.contains("instagram") && eventClassName.contains("ClipsViewerActivity", ignoreCase = true) -> true
+            (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) && eventClassName.contains("ReelsViewerActivity", ignoreCase = true) -> true
             else -> false
         }
 
@@ -547,40 +587,51 @@ class ShortsBlockerService : AccessibilityService() {
         }
     }
 
-    private fun isYouTubeShortsPlayerActive(root: AccessibilityNodeInfo): Boolean {
-        return hasMatchingPlayerNode(root, youtubePlayerIndicators)
+    private fun isYouTubeShortsPlayerActive(root: AccessibilityNodeInfo, className: String = ""): Boolean {
+        if (className.contains("ReelWatchActivity", ignoreCase = true) || className.contains("ShortsActivity", ignoreCase = true)) {
+            return true
+        }
+        return hasMatchingPlayerNode(root, youtubePlayerIndicators, youtubeShortsTextKeywords)
     }
 
-    private fun isFacebookReelsPlayerActive(root: AccessibilityNodeInfo): Boolean {
+    private fun isFacebookReelsPlayerActive(root: AccessibilityNodeInfo, className: String = ""): Boolean {
+        if (className.contains("ReelsViewerActivity", ignoreCase = true) || className.contains("FbShortsViewerFragment", ignoreCase = true)) {
+            return true
+        }
         return hasMatchingPlayerNode(root, facebookReelsPlayerIndicators)
     }
 
-    private fun isInstagramReelsPlayerActive(root: AccessibilityNodeInfo): Boolean {
+    private fun isInstagramReelsPlayerActive(root: AccessibilityNodeInfo, className: String = ""): Boolean {
+        if (className.contains("ClipsViewerActivity", ignoreCase = true) || className.contains("ClipsViewerFragment", ignoreCase = true)) {
+            return true
+        }
         return hasMatchingPlayerNode(root, instagramReelsPlayerIndicators)
     }
 
     private fun hasMatchingPlayerNode(
         node: AccessibilityNodeInfo,
         playerIndicators: List<String>,
+        textKeywords: List<String> = emptyList(),
         depth: Int = 0
     ): Boolean {
-        if (depth > 35) return false
+        if (depth > 40) return false
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val className = node.className?.toString()?.lowercase() ?: ""
         val contentDesc = node.contentDescription?.toString()?.lowercase() ?: ""
-
-        if (ignoredElementKeywords.any { viewId.contains(it) || contentDesc.contains(it) }) {
-            return false
-        }
+        val text = node.text?.toString()?.lowercase() ?: ""
 
         if (playerIndicators.any { viewId.contains(it) || className.contains(it) }) {
             return true
         }
 
+        if (textKeywords.isNotEmpty() && textKeywords.any { contentDesc.contains(it) || text.contains(it) }) {
+            return true
+        }
+
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            if (hasMatchingPlayerNode(child, playerIndicators, depth + 1)) {
+            if (hasMatchingPlayerNode(child, playerIndicators, textKeywords, depth + 1)) {
                 return true
             }
         }

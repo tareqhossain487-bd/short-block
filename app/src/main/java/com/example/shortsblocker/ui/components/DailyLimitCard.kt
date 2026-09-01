@@ -228,12 +228,19 @@ fun AppAndShortsDailyLimitCard(
 
                             Spacer(modifier = Modifier.width(6.dp))
 
-                            val shortsStatus = when (currentConfig.shortsLimitMinutes) {
-                                -1 -> "Unlimited"
-                                0 -> "Block"
+                            val shortsStatus = when {
+                                currentConfig.shortsLimitMinutes == -1 -> "Unlimited"
+                                currentConfig.shortsLimitMinutes == 0 -> "Block"
+                                currentConfig.shortsLimitMinutes >= 60 && currentConfig.shortsLimitMinutes % 60 == 0 -> "${currentConfig.shortsLimitMinutes / 60}h"
+                                currentConfig.shortsLimitMinutes >= 60 -> "${currentConfig.shortsLimitMinutes / 60}h ${currentConfig.shortsLimitMinutes % 60}m"
                                 else -> "${currentConfig.shortsLimitMinutes}m"
                             }
-                            val appStatus = if (currentConfig.appLimitMinutes == 0) "Unlimited" else "${currentConfig.appLimitMinutes}m"
+                            val appStatus = when {
+                                currentConfig.appLimitMinutes == 0 -> "Unlimited"
+                                currentConfig.appLimitMinutes >= 60 && currentConfig.appLimitMinutes % 60 == 0 -> "${currentConfig.appLimitMinutes / 60}h"
+                                currentConfig.appLimitMinutes >= 60 -> "${currentConfig.appLimitMinutes / 60}h ${currentConfig.appLimitMinutes % 60}m"
+                                else -> "${currentConfig.appLimitMinutes}m"
+                            }
 
                             Surface(
                                 color = primaryThemeColor.copy(alpha = 0.12f),
@@ -626,10 +633,16 @@ private fun AppLimitSubSection(
 
                     Spacer(modifier = Modifier.width(6.dp))
 
+                    val formattedLimit = when {
+                        limitMinutes >= 60 && limitMinutes % 60 == 0 -> "${limitMinutes / 60}h"
+                        limitMinutes >= 60 -> "${limitMinutes / 60}h ${limitMinutes % 60}m"
+                        else -> "${limitMinutes}m"
+                    }
+
                     Text(
                         text = when {
                             isShorts && limitMinutes == 0 -> "সম্পূর্ণ বন্ধ (Block)"
-                            limitMinutes > 0 -> "${usedMinutes}m ${usedSecondsRemainder}s / ${limitMinutes}m"
+                            limitMinutes > 0 -> "${usedMinutes}m ${usedSecondsRemainder}s / $formattedLimit"
                             else -> "${usedMinutes}m ${usedSecondsRemainder}s"
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -700,16 +713,21 @@ private fun AppLimitSubSection(
                 )
             }
 
-            // Custom Chip
+            // Custom Chip with formatted hours and minutes
+            val customFormatted = when {
+                limitMinutes >= 60 && limitMinutes % 60 == 0 -> "${limitMinutes / 60}h"
+                limitMinutes >= 60 -> "${limitMinutes / 60}h ${limitMinutes % 60}m"
+                else -> "${limitMinutes}m"
+            }
+
             FilterChip(
                 selected = isCustomActive,
                 onClick = {
-                    customInputText = if (isCustomActive) limitMinutes.toString() else ""
                     showCustomDialog = true
                 },
                 label = {
                     Text(
-                        text = if (isCustomActive) "Custom (${limitMinutes}m)" else "Custom...",
+                        text = if (isCustomActive) "Custom ($customFormatted)" else "Custom...",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = if (isCustomActive) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1
@@ -758,47 +776,184 @@ private fun AppLimitSubSection(
     }
 
     if (showCustomDialog) {
+        var hourInput by remember {
+            mutableStateOf(if (limitMinutes > 0) (limitMinutes / 60).let { if (it > 0) it.toString() else "" } else "")
+        }
+        var minInput by remember {
+            mutableStateOf(if (limitMinutes > 0) (limitMinutes % 60).let { if (it > 0) it.toString() else "" } else "")
+        }
+
+        val parsedHours = hourInput.toIntOrNull() ?: 0
+        val parsedMins = minInput.toIntOrNull() ?: 0
+        val totalCalculatedMinutes = (parsedHours * 60) + parsedMins
+
         AlertDialog(
             onDismissRequest = { showCustomDialog = false },
             title = {
-                Text(text = "Custom Limit ($title)", fontWeight = FontWeight.Bold)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Timer,
+                        contentDescription = null,
+                        tint = IndigoPrimary
+                    )
+                    Text(
+                        text = "Custom Limit ($title)",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Text(
-                        text = "Enter daily limit in minutes (e.g. 1, 15, 30, 45):",
-                        style = MaterialTheme.typography.bodySmall
+                        text = "ঘণ্টা (Hour) এবং মিনিট (Minute) নির্ধারণ করুন:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    OutlinedTextField(
-                        value = customInputText,
-                        onValueChange = { input ->
-                            if (input.all { it.isDigit() } && input.length <= 4) {
-                                customInputText = input
-                            }
-                        },
-                        label = { Text("Minutes") },
-                        placeholder = { Text("e.g. 1 or 30") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+
+                    // Hours and Minutes Input Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Hour Field
+                        OutlinedTextField(
+                            value = hourInput,
+                            onValueChange = { input ->
+                                if (input.all { it.isDigit() } && input.length <= 2) {
+                                    hourInput = input
+                                }
+                            },
+                            label = { Text("ঘণ্টা (Hour)") },
+                            placeholder = { Text("0") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("${tagPrefix}_input_hours")
+                        )
+
+                        // Minute Field
+                        OutlinedTextField(
+                            value = minInput,
+                            onValueChange = { input ->
+                                if (input.all { it.isDigit() } && input.length <= 3) {
+                                    minInput = input
+                                }
+                            },
+                            label = { Text("মিনিট (Minute)") },
+                            placeholder = { Text("30") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("${tagPrefix}_input_minutes")
+                        )
+                    }
+
+                    // Quick-Add Presets inside Dialog
+                    Text(
+                        text = "দ্রুত যোগ করুন (Quick Add):",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        SuggestionChip(
+                            onClick = {
+                                val currentTotal = totalCalculatedMinutes + 15
+                                hourInput = (currentTotal / 60).let { if (it > 0) it.toString() else "" }
+                                minInput = (currentTotal % 60).let { if (it > 0) it.toString() else "" }
+                            },
+                            label = { Text("+15 min") }
+                        )
+                        SuggestionChip(
+                            onClick = {
+                                val currentTotal = totalCalculatedMinutes + 30
+                                hourInput = (currentTotal / 60).let { if (it > 0) it.toString() else "" }
+                                minInput = (currentTotal % 60).let { if (it > 0) it.toString() else "" }
+                            },
+                            label = { Text("+30 min") }
+                        )
+                        SuggestionChip(
+                            onClick = {
+                                val currentTotal = totalCalculatedMinutes + 60
+                                hourInput = (currentTotal / 60).toString()
+                                minInput = (currentTotal % 60).let { if (it > 0) it.toString() else "" }
+                            },
+                            label = { Text("+1 hour") }
+                        )
+                        SuggestionChip(
+                            onClick = {
+                                val currentTotal = totalCalculatedMinutes + 120
+                                hourInput = (currentTotal / 60).toString()
+                                minInput = (currentTotal % 60).let { if (it > 0) it.toString() else "" }
+                            },
+                            label = { Text("+2 hour") }
+                        )
+                        SuggestionChip(
+                            onClick = {
+                                hourInput = ""
+                                minInput = ""
+                            },
+                            label = { Text("Clear", color = RoseError) }
+                        )
+                    }
+
+                    // Calculation & Summary Card
+                    Surface(
+                        color = IndigoPrimary.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, IndigoPrimary.copy(alpha = 0.2f)),
                         modifier = Modifier.fillMaxWidth()
-                    )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "মোট দৈনিক সময়সীমা:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            val summary = when {
+                                totalCalculatedMinutes <= 0 -> "Unlimited (0 মিনিট)"
+                                parsedHours > 0 && parsedMins > 0 -> "$parsedHours ঘণ্টা $parsedMins মিনিট ($totalCalculatedMinutes মিনিট)"
+                                parsedHours > 0 -> "$parsedHours ঘণ্টা ($totalCalculatedMinutes মিনিট)"
+                                else -> "$parsedMins মিনিট"
+                            }
+                            Text(
+                                text = summary,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = IndigoPrimary
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        val parsed = customInputText.toIntOrNull() ?: 0
-                        onSelectLimit(parsed)
+                        onSelectLimit(totalCalculatedMinutes)
                         showCustomDialog = false
                     },
-                    enabled = customInputText.isNotBlank() && (customInputText.toIntOrNull() ?: 0) >= 0
+                    modifier = Modifier.testTag("${tagPrefix}_save_custom_btn")
                 ) {
-                    Text("Save")
+                    Text("সেভ করুন (Save)")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCustomDialog = false }) {
-                    Text("Cancel")
+                    Text("বাতিল (Cancel)")
                 }
             }
         )
