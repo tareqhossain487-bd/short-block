@@ -277,6 +277,8 @@ fun AppAndShortsDailyLimitCard(
                         usedSeconds = currentConfig.appTodayUsedSeconds,
                         presets = listOf(
                             0 to "Unlimited",
+                            1 to "1 min",
+                            5 to "5 min",
                             15 to "15 min",
                             30 to "30 min",
                             45 to "45 min",

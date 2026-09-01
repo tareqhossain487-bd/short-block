@@ -241,13 +241,21 @@ class ShortsBlockerService : AccessibilityService() {
         val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
         if (!isMasterEnabled) return
 
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        if (powerManager?.isInteractive == false) {
+            return
+        }
+
         val root = try { rootInActiveWindow } catch (_: Exception) { null }
         val rootPkg = root?.packageName?.toString() ?: ""
         val now = SystemClock.elapsedRealtime()
 
         val currentPkg = when {
-            rootPkg.isNotBlank() -> rootPkg
-            (now - lastPackageEventTime) < 4000L -> activeForegroundPackage
+            rootPkg.isNotBlank() && !isIgnoredSystemPackage(rootPkg) -> {
+                activeForegroundPackage = rootPkg
+                rootPkg
+            }
+            activeForegroundPackage.isNotBlank() -> activeForegroundPackage
             else -> ""
         }
 
@@ -266,10 +274,11 @@ class ShortsBlockerService : AccessibilityService() {
 
         // 2. Check if App Limit is exceeded
         if (appLimitMinutes > 0 && currentAppUsed >= (appLimitMinutes * 60L)) {
-            if (now - lastHomeActionTimestamp >= 1500L) {
+            if (now - lastHomeActionTimestamp >= 1000L) {
                 lastHomeActionTimestamp = now
                 showAppLimitToast(appLabel, appLimitMinutes)
                 recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", currentPkg)
+                activeForegroundPackage = ""
                 // Kick out of app to Home screen immediately
                 performGlobalAction(GLOBAL_ACTION_HOME)
                 performGlobalAction(GLOBAL_ACTION_BACK)
@@ -317,6 +326,15 @@ class ShortsBlockerService : AccessibilityService() {
         }
     }
 
+    private fun isIgnoredSystemPackage(pkg: String): Boolean {
+        val lower = pkg.lowercase()
+        return lower.contains("inputmethod") ||
+                lower.contains("keyboard") ||
+                lower.contains("latin") ||
+                lower.contains("toast") ||
+                lower.contains("volume")
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (!::prefs.isInitialized) {
@@ -330,8 +348,7 @@ class ShortsBlockerService : AccessibilityService() {
 
         val packageName = event.packageName?.toString() ?: return
 
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+        if (!isIgnoredSystemPackage(packageName)) {
             activeForegroundPackage = packageName
             lastPackageEventTime = SystemClock.elapsedRealtime()
         }
@@ -362,10 +379,11 @@ class ShortsBlockerService : AccessibilityService() {
         val appLimitMinutes = prefs.getInt("app_limit_$appKey", 0)
         val todayAppUsedSeconds = prefs.getLong("app_used_sec_$appKey", 0L)
         if (appLimitMinutes > 0 && todayAppUsedSeconds >= (appLimitMinutes * 60L)) {
-            if (now - lastHomeActionTimestamp >= 1200L) {
+            if (now - lastHomeActionTimestamp >= 800L) {
                 lastHomeActionTimestamp = now
                 showAppLimitToast(appLabel, appLimitMinutes)
                 recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", packageName)
+                activeForegroundPackage = ""
                 performGlobalAction(GLOBAL_ACTION_HOME)
                 performGlobalAction(GLOBAL_ACTION_BACK)
             }
