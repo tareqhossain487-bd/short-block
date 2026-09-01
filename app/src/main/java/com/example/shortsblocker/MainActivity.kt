@@ -197,7 +197,14 @@ fun ShortsBlockerApp(
                     )
                 }
 
-                // 3. Stats & Time Saved Dashboard
+                // 3. Data Visualization & Productivity Analytics (Time Spent vs Time Saved)
+                item {
+                    DailyAnalyticsCard(
+                        uiState = uiState
+                    )
+                }
+
+                // 4. Stats & Time Saved Dashboard
                 item {
                     StatsDashboard(
                         uiState = uiState,
@@ -205,7 +212,7 @@ fun ShortsBlockerApp(
                     )
                 }
 
-                // 4. Target Platforms & Installed App Picker (with Search)
+                // 5. Target Platforms & Installed App Picker (with Search)
                 item {
                     PlatformToggles(
                         uiState = uiState,
