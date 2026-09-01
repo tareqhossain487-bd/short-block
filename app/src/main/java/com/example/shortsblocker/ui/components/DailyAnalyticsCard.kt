@@ -164,6 +164,7 @@ fun DailyAnalyticsCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -181,19 +182,23 @@ fun DailyAnalyticsCard(
                             modifier = Modifier.size(20.dp)
                         )
                     }
-                    Column {
+                    Column(modifier = Modifier.weight(1f, fill = false)) {
                         Text(
                             text = "Daily Time Analytics",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                         Text(
-                            text = "Time Spent vs. Time Saved (আজকের বিশ্লেষণ)",
+                            text = "Time Spent vs. Time Saved",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.width(8.dp))
 
                 // Efficiency Ratio Badge
                 Surface(
@@ -215,7 +220,9 @@ fun DailyAnalyticsCard(
                             text = "$efficiencyPercent% Focus",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = EmeraldSuccess
+                            color = EmeraldSuccess,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }

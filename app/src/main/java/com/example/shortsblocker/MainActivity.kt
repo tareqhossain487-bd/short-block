@@ -149,7 +149,7 @@ fun ShortsBlockerApp(
                         }
 
                         Text(
-                            text = "ShortsBlocker",
+                            text = "Blocker",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )

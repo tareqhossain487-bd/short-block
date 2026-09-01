@@ -1,6 +1,6 @@
 {
-  "name": "ShortsBlocker",
-  "description": "Automatically detect and block YouTube Shorts and Facebook Reels using Android Accessibility Service with real-time stats and controls.",
+  "name": "Blocker",
+  "description": "Automatically detect and block YouTube Shorts, Facebook Reels, adult content, and manage daily app limits with real-time stats and controls.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
