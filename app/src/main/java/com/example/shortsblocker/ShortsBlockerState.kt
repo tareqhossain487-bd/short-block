@@ -67,6 +67,12 @@ data class ShortsBlockerUiState(
     val blockAdultWebsites: Boolean = true,
     val customBlockedWebsites: List<BlockedDomain> = emptyList(),
     val reminderMessage: String = "আল্লাহর দিকে ফিরে আসো",
+    // Ad Blocker & Auto-Skip
+    val blockAds: Boolean = true,
+    val autoSkipVideoAds: Boolean = true,
+    val blockPopupAds: Boolean = true,
+    val customAdFilters: List<BlockedDomain> = emptyList(),
+    val adsBlockedCount: Int = 0,
     val installedApps: List<InstalledAppItem> = emptyList(),
     val isLoadingApps: Boolean = false,
     val totalBlockedCount: Int = 0,

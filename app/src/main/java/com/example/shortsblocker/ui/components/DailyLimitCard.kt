@@ -206,52 +206,60 @@ fun AppAndShortsDailyLimitCard(
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Title badge with proper spacing so text never breaks vertically
-                    Row(
+                    // Title & Summary Row - Responsive on small screens
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = "${currentConfig.displayName} লিমিট সেটিংস",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = primaryThemeColor,
-                            modifier = Modifier.weight(1f, fill = false),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        Surface(
-                            color = primaryThemeColor.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(6.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            val shortsStatus = when (currentConfig.shortsLimitMinutes) {
-                                -1 -> "Unlimited"
-                                0 -> "Block (Off)"
-                                else -> "${currentConfig.shortsLimitMinutes}m"
-                            }
                             Text(
-                                text = if (isCustomSelected) {
-                                    "Limit: ${if (currentConfig.appLimitMinutes == 0) "Unlimited" else "${currentConfig.appLimitMinutes}m"}"
-                                } else {
-                                    "App: ${if (currentConfig.appLimitMinutes == 0) "Unlimited" else "${currentConfig.appLimitMinutes}m"} | Shorts: $shortsStatus"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
+                                text = "${currentConfig.displayName} লিমিট সেটিংস",
+                                style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = primaryThemeColor,
+                                modifier = Modifier.weight(1f, fill = false),
                                 maxLines = 1,
-                                softWrap = false,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                overflow = TextOverflow.Ellipsis
                             )
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            val shortsStatus = when (currentConfig.shortsLimitMinutes) {
+                                -1 -> "Unlimited"
+                                0 -> "Block"
+                                else -> "${currentConfig.shortsLimitMinutes}m"
+                            }
+                            val appStatus = if (currentConfig.appLimitMinutes == 0) "Unlimited" else "${currentConfig.appLimitMinutes}m"
+
+                            Surface(
+                                color = primaryThemeColor.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = if (isCustomSelected) "Limit: $appStatus" else "App: $appStatus • Shorts: $shortsStatus",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = primaryThemeColor,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
                         }
                     }
 
                     // 1. App Limit Section (with prominent Progress bar and Usage indicator)
                     AppLimitSubSection(
-                        title = "1. App Limit (মোট ব্যবহারের সময়)",
+                        title = "1. App Limit",
                         description = if (currentConfig.appLimitMinutes == 0) {
                             "Unlimited: সারাদিনে যতক্ষণ ইচ্ছা অ্যাপ ব্যবহার করা যাবে।"
                         } else {
@@ -284,10 +292,10 @@ fun AppAndShortsDailyLimitCard(
                         )
 
                         AppLimitSubSection(
-                            title = "2. Short Limit (শর্টস/রিলসের সময়)",
+                            title = "2. Shorts & Reels Limit",
                             description = when (currentConfig.shortsLimitMinutes) {
                                 -1 -> "Unlimited: শর্টস বা রিলস ইচ্ছেমতো দেখা যাবে, কোনো ব্লকিং হবে না।"
-                                0 -> "Block (Off): শর্টস/রিলস সম্পূর্ণ বন্ধ (Off)। ওপেন করলেই সাথে সাথে ব্লক হবে।"
+                                0 -> "Block: শর্টস/রিলস সম্পূর্ণ বন্ধ থাকবে। ওপেন করলেই সাথে সাথে ব্লক হবে।"
                                 else -> "দৈনিক ${currentConfig.shortsLimitMinutes} মিনিট শর্টস দেখতে পারবেন। সময় শেষ হলে শুধুমাত্র শর্টস ব্লক হবে (বড় ভিডিও চলবে)।"
                             },
                             icon = Icons.Default.PlayArrow,
@@ -295,7 +303,7 @@ fun AppAndShortsDailyLimitCard(
                             usedSeconds = currentConfig.shortsTodayUsedSeconds,
                             presets = listOf(
                                 -1 to "Unlimited",
-                                0 to "Block (Off)",
+                                0 to "Block",
                                 1 to "1 min",
                                 3 to "3 min",
                                 5 to "5 min",
@@ -377,7 +385,7 @@ fun AppAndShortsDailyLimitCard(
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f, fill = false)
                                     ) {
                                         Box(
                                             modifier = Modifier
@@ -394,7 +402,7 @@ fun AppAndShortsDailyLimitCard(
                                             )
                                         }
 
-                                        Column {
+                                        Column(modifier = Modifier.weight(1f, fill = false)) {
                                             Text(
                                                 text = customApp.name,
                                                 style = MaterialTheme.typography.bodyMedium,
@@ -404,30 +412,31 @@ fun AppAndShortsDailyLimitCard(
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = "আজ ব্যবহার: ${usedMins}m ${usedSecs}s" +
-                                                        if (hasLimit) " / ${customApp.dailyLimitMinutes}m" else " (Unlimited)",
+                                                text = if (hasLimit) "ব্যবহার: ${usedMins}m ${usedSecs}s / ${customApp.dailyLimitMinutes}m" else "ব্যবহার: ${usedMins}m ${usedSecs}s (Unlimited)",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = if (isLimitExceeded) RoseError else MaterialTheme.colorScheme.onSurfaceVariant,
                                                 maxLines = 1,
-                                                softWrap = false
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
                                     }
 
+                                    Spacer(modifier = Modifier.width(6.dp))
+
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
                                     ) {
                                         // Reset button for this custom app
                                         IconButton(
                                             onClick = { onResetAppUsage(customApp.packageName) },
-                                            modifier = Modifier.size(32.dp)
+                                            modifier = Modifier.size(30.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.RestartAlt,
                                                 contentDescription = "Reset usage",
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(18.dp)
+                                                modifier = Modifier.size(16.dp)
                                             )
                                         }
 
@@ -441,13 +450,13 @@ fun AppAndShortsDailyLimitCard(
                                         // Delete button
                                         IconButton(
                                             onClick = { onRemoveCustomApp(customApp.packageName) },
-                                            modifier = Modifier.size(32.dp)
+                                            modifier = Modifier.size(30.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.DeleteOutline,
                                                 contentDescription = "Delete app",
                                                 tint = RoseError,
-                                                modifier = Modifier.size(18.dp)
+                                                modifier = Modifier.size(16.dp)
                                             )
                                         }
                                     }
@@ -505,7 +514,7 @@ private fun AppLimitSubSection(
         val isShorts = tagPrefix.contains("shorts")
         val badgeText = when {
             isShorts && limitMinutes == -1 -> "Unlimited"
-            isShorts && limitMinutes == 0 -> "Block (Off)"
+            isShorts && limitMinutes == 0 -> "Block"
             !isShorts && limitMinutes == 0 -> "Unlimited"
             isExceeded -> "Limit Reached"
             else -> "${(limitMinutes - usedMinutes).coerceAtLeast(0)}m left"
@@ -536,7 +545,7 @@ private fun AppLimitSubSection(
                 )
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
@@ -544,7 +553,7 @@ private fun AppLimitSubSection(
                 )
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
 
             Surface(
                 color = badgeColor.copy(alpha = 0.15f),
@@ -556,7 +565,6 @@ private fun AppLimitSubSection(
                     fontWeight = FontWeight.Bold,
                     color = badgeColor,
                     maxLines = 1,
-                    softWrap = false,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                 )
             }
@@ -571,13 +579,13 @@ private fun AppLimitSubSection(
         // Always show live Usage Process Box & Progress Bar (how many minutes used today)
         Surface(
             shape = RoundedCornerShape(10.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(10.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Row(
@@ -604,42 +612,58 @@ private fun AppLimitSubSection(
                         )
                         Text(
                             text = when {
-                                isShorts && limitMinutes == 0 -> "স্ট্যাটাস: শর্টস সম্পূর্ণ বন্ধ (Block / Off)"
-                                isShorts && limitMinutes == -1 -> "আজ শর্টস ব্যবহার: ${usedMinutes}m ${usedSecondsRemainder}s (Unlimited)"
-                                limitMinutes > 0 -> "আজ ব্যবহার: ${usedMinutes}m ${usedSecondsRemainder}s / ${limitMinutes}m"
-                                else -> "আজ মোট ব্যবহার: ${usedMinutes}m ${usedSecondsRemainder}s (Unlimited)"
+                                isShorts && limitMinutes == 0 -> "শর্টস স্ট্যাটাস"
+                                isShorts -> "শর্টস ব্যবহার"
+                                else -> "অ্যাপ ব্যবহার"
                             },
                             style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Medium,
                             maxLines = 1,
-                            softWrap = false
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    if (limitMinutes > 0) {
-                        Text(
-                            text = "${(progress * 100).toInt()}%",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isExceeded) RoseError else accentColor,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    Text(
+                        text = when {
+                            isShorts && limitMinutes == 0 -> "সম্পূর্ণ বন্ধ (Block)"
+                            limitMinutes > 0 -> "${usedMinutes}m ${usedSecondsRemainder}s / ${limitMinutes}m"
+                            else -> "${usedMinutes}m ${usedSecondsRemainder}s"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isExceeded) RoseError else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 // Progress indicator bar (if limit > 0) or usage activity indicator
                 if (limitMinutes > 0) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)),
-                        color = if (isExceeded) RoseError else accentColor,
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp)),
+                            color = if (isExceeded) RoseError else accentColor,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                        Text(
+                            text = "${(progress * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isExceeded) RoseError else accentColor,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
         }
@@ -660,8 +684,7 @@ private fun AppLimitSubSection(
                             text = label,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            maxLines = 1,
-                            softWrap = false
+                            maxLines = 1
                         )
                     },
                     leadingIcon = if (isSelected) {
@@ -689,8 +712,7 @@ private fun AppLimitSubSection(
                         text = if (isCustomActive) "Custom (${limitMinutes}m)" else "Custom...",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = if (isCustomActive) FontWeight.Bold else FontWeight.Normal,
-                        maxLines = 1,
-                        softWrap = false
+                        maxLines = 1
                     )
                 },
                 leadingIcon = {
@@ -712,8 +734,7 @@ private fun AppLimitSubSection(
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = RoseError,
-                        maxLines = 1,
-                        softWrap = false
+                        maxLines = 1
                     )
                 },
                 leadingIcon = {

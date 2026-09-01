@@ -44,6 +44,22 @@ class ShortsBlockerService : AccessibilityService() {
         "hqporner", "tnaflix", "tube8", "spankwire", "daftsex", "vporn", "leakgirls"
     )
 
+    // Intrusive Ad Networks, Popups and Malicious Trackers
+    private val defaultAdNetworks = listOf(
+        "doubleclick.net", "googleadservices", "pagead2.googlesyndication",
+        "popads.net", "propellerads", "adsterra", "exoclick", "trafficjunky",
+        "outbrain.com", "taboola.com", "mgid.com", "adnxs.com", "criteo.com",
+        "adroll.com", "clickadu", "richpush", "onclickads", "bet365", "1xbet",
+        "melbet", "mostbet", "adcolony", "applovin", "unityads", "ironsrc"
+    )
+
+    // Skip Ad button identifiers and texts across apps
+    private val skipAdButtonKeywords = listOf(
+        "skip_ad", "ad_skip", "skip_button", "skipbutton", "btn_skip",
+        "ytp-ad-skip-button", "action_skip", "skip_ad_container",
+        "skip ad", "skip ads", "skip", "বিজ্ঞাপন এড়িয়ে যান", "বিজ্ঞাপন এড়িয়ে যান", "স্কিপ"
+    )
+
     // Browsers package names to inspect for URL / Web address bars
     private val browserPackages = listOf(
         "com.android.chrome",
@@ -245,7 +261,7 @@ class ShortsBlockerService : AccessibilityService() {
                 prefs.edit().putLong(shortsPrefUsedKey, currentShortsUsed).apply()
 
                 // If shortsLimitMinutes == -1 (Unlimited), do NOT block.
-                // If shortsLimitMinutes == 0 (Block/Off), block immediately.
+                // If shortsLimitMinutes == 0 (Block), block immediately without annoying toast.
                 // If shortsLimitMinutes > 0, block when used >= limit.
                 if (shortsLimitMinutes != -1 && (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L))) {
                     if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
@@ -258,8 +274,6 @@ class ShortsBlockerService : AccessibilityService() {
                         }
                         if (shortsLimitMinutes > 0) {
                             showShortsLimitToast(shortLabel, shortsLimitMinutes)
-                        } else {
-                            showShortsStrictBlockToast(shortLabel)
                         }
                         recordBlockEvent(shortLabel, currentPkg)
                         performGlobalAction(GLOBAL_ACTION_BACK)
@@ -288,14 +302,18 @@ class ShortsBlockerService : AccessibilityService() {
             lastPackageEventTime = SystemClock.elapsedRealtime()
         }
 
-        // 1. Check if event is in a Web Browser for Adult/Porn Sites or Custom Blocked Domains
+        // 1. Check if event is in a Web Browser for Adult/Porn Sites or Custom Blocked Domains or Ads
         val isBrowser = browserPackages.any { packageName.contains(it, ignoreCase = true) }
         if (isBrowser) {
             handleBrowserEvent(packageName)
             return
         }
 
-        // 2. Check for Tracked Apps
+        // 2. Try auto-skipping video ads if enabled
+        val root: AccessibilityNodeInfo = rootInActiveWindow ?: return
+        tryAutoSkipAds(root, packageName)
+
+        // 3. Check for Tracked Apps
         val trackedApp = getTrackedAppInfo(packageName) ?: return
         val appKey = trackedApp.appKey
         val appLabel = trackedApp.appLabel
@@ -317,8 +335,6 @@ class ShortsBlockerService : AccessibilityService() {
             return
         }
 
-        val root: AccessibilityNodeInfo = rootInActiveWindow ?: return
-
         val isShortsOpen = when {
             isCustomApp -> true
             packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root)
@@ -333,7 +349,7 @@ class ShortsBlockerService : AccessibilityService() {
             val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0)
             val todayShortsUsedSeconds = prefs.getLong(shortsPrefUsedKey, 0L)
 
-            // -1 = Unlimited (no block), 0 = Block (Off), > 0 = time limit
+            // -1 = Unlimited (no block), 0 = Block, > 0 = time limit
             if (shortsLimitMinutes != -1 && (shortsLimitMinutes == 0 || todayShortsUsedSeconds >= (shortsLimitMinutes * 60L))) {
                 if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
                     lastBackActionTimestamp = now
@@ -345,8 +361,6 @@ class ShortsBlockerService : AccessibilityService() {
                     }
                     if (shortsLimitMinutes > 0) {
                         showShortsLimitToast(shortLabel, shortsLimitMinutes)
-                    } else {
-                        showShortsStrictBlockToast(shortLabel)
                     }
                     recordBlockEvent(shortLabel, packageName)
                     performGlobalAction(GLOBAL_ACTION_BACK)
@@ -357,8 +371,18 @@ class ShortsBlockerService : AccessibilityService() {
 
     private fun handleBrowserEvent(packageName: String) {
         val blockAdult = prefs.getBoolean(PREF_BLOCK_ADULT_WEBSITES, true)
+        val blockAds = prefs.getBoolean(PREF_BLOCK_ADS, true)
+        
         val customSitesStr = prefs.getString(PREF_CUSTOM_WEBSITES, "") ?: ""
         val customSites = customSitesStr.split(";")
+            .filter { it.isNotBlank() }
+            .mapNotNull {
+                val parts = it.split("#")
+                if (parts.size >= 2 && parts[1].toBoolean()) parts[0].lowercase().trim() else null
+            }
+
+        val customAdFiltersStr = prefs.getString(PREF_CUSTOM_AD_FILTERS, "") ?: ""
+        val customAdFilters = customAdFiltersStr.split(";")
             .filter { it.isNotBlank() }
             .mapNotNull {
                 val parts = it.split("#")
@@ -369,18 +393,69 @@ class ShortsBlockerService : AccessibilityService() {
         val urlOrContent = findBrowserUrlOrKeywords(root) ?: return
 
         val containsAdult = blockAdult && adultKeywords.any { urlOrContent.contains(it) }
-        val containsCustom = customSites.any { it.isNotEmpty() && urlOrContent.contains(it) }
+        val containsCustomSite = customSites.any { it.isNotEmpty() && urlOrContent.contains(it) }
+        val containsAdNetwork = blockAds && (defaultAdNetworks.any { urlOrContent.contains(it) } || customAdFilters.any { it.isNotEmpty() && urlOrContent.contains(it) })
 
-        if (containsAdult || containsCustom) {
+        if (containsAdult || containsCustomSite || containsAdNetwork) {
             val now = SystemClock.elapsedRealtime()
             if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
                 lastBackActionTimestamp = now
-                val label = if (containsAdult) "Adult Website Blocked" else "Custom Website Blocked"
+                val label = when {
+                    containsAdult -> "Adult Website Blocked"
+                    containsAdNetwork -> "Ad Popup / Network Blocked"
+                    else -> "Custom Website Blocked"
+                }
                 recordBlockEvent(label, packageName)
-                showReminderToast()
+                if (containsAdult || containsCustomSite) {
+                    showReminderToast()
+                }
                 performGlobalAction(GLOBAL_ACTION_BACK)
             }
         }
+    }
+
+    private fun tryAutoSkipAds(root: AccessibilityNodeInfo, packageName: String) {
+        val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
+        if (!autoSkip) return
+
+        val skipButton = findClickableNodeMatchingKeywords(root, skipAdButtonKeywords) ?: return
+        val clicked = skipButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        if (clicked) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastToastTimestamp >= 3000L) {
+                lastToastTimestamp = now
+                recordAdBlockEvent("Video Ad Skipped", packageName)
+            }
+        }
+    }
+
+    private fun findClickableNodeMatchingKeywords(
+        node: AccessibilityNodeInfo,
+        keywords: List<String>,
+        depth: Int = 0
+    ): AccessibilityNodeInfo? {
+        if (depth > 30) return null
+
+        val viewId = node.viewIdResourceName?.lowercase() ?: ""
+        val text = node.text?.toString()?.lowercase() ?: ""
+        val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+
+        val matches = keywords.any {
+            viewId.contains(it) || (text.isNotBlank() && text.contains(it)) || (desc.isNotBlank() && desc.contains(it))
+        }
+
+        if (matches) {
+            if (node.isClickable) return node
+            val parent = node.parent
+            if (parent != null && parent.isClickable) return parent
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findClickableNodeMatchingKeywords(child, keywords, depth + 1)
+            if (found != null) return found
+        }
+        return null
     }
 
     private fun findBrowserUrlOrKeywords(node: AccessibilityNodeInfo, depth: Int = 0): String? {
@@ -449,21 +524,6 @@ class ShortsBlockerService : AccessibilityService() {
         }
     }
 
-    private fun showShortsStrictBlockToast(shortLabel: String) {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastToastTimestamp < 2500L) return
-        lastToastTimestamp = now
-
-        val customMsg = prefs.getString(PREF_REMINDER_MESSAGE, DEFAULT_REMINDER_MESSAGE) ?: DEFAULT_REMINDER_MESSAGE
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(
-                applicationContext,
-                "🚫 $shortLabel সম্পূর্ণ বন্ধ (Block / Off)! $customMsg",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
-    }
-
     private fun checkAndResetDailyUsage() {
         val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
         val savedDate = prefs.getString(PREF_TODAY_DATE, "") ?: ""
@@ -527,6 +587,27 @@ class ShortsBlockerService : AccessibilityService() {
         return false
     }
 
+    private fun recordAdBlockEvent(appLabel: String, packageName: String) {
+        val currentTotal = prefs.getInt(PREF_TOTAL_BLOCKED, 0) + 1
+        val currentAdsBlocked = prefs.getInt(PREF_ADS_BLOCKED_COUNT, 0) + 1
+        val editor = prefs.edit()
+            .putInt(PREF_TOTAL_BLOCKED, currentTotal)
+            .putInt(PREF_ADS_BLOCKED_COUNT, currentAdsBlocked)
+
+        val now = System.currentTimeMillis()
+        editor.putLong(PREF_LAST_BLOCKED_TIME, now)
+        editor.putString(PREF_LAST_BLOCKED_APP, appLabel)
+
+        val existingLogs = prefs.getString(PREF_RECENT_LOGS, "") ?: ""
+        val newEntry = "$now,$appLabel,$packageName"
+        val updatedLogs = (listOf(newEntry) + existingLogs.split(";").filter { it.isNotBlank() })
+            .take(20)
+            .joinToString(";")
+
+        editor.putString(PREF_RECENT_LOGS, updatedLogs)
+        editor.apply()
+    }
+
     private fun recordBlockEvent(appLabel: String, packageName: String) {
         val currentTotal = prefs.getInt(PREF_TOTAL_BLOCKED, 0) + 1
         val editor = prefs.edit().putInt(PREF_TOTAL_BLOCKED, currentTotal)
@@ -572,6 +653,13 @@ class ShortsBlockerService : AccessibilityService() {
         const val PREF_CUSTOM_WEBSITES = "custom_websites_list"
         const val PREF_REMINDER_MESSAGE = "block_reminder_message"
         const val DEFAULT_REMINDER_MESSAGE = "আল্লাহর দিকে ফিরে আসো"
+
+        // Ad Blocker preferences
+        const val PREF_BLOCK_ADS = "block_ads"
+        const val PREF_AUTO_SKIP_VIDEO_ADS = "auto_skip_video_ads"
+        const val PREF_BLOCK_POPUP_ADS = "block_popup_ads"
+        const val PREF_CUSTOM_AD_FILTERS = "custom_ad_filters_list"
+        const val PREF_ADS_BLOCKED_COUNT = "ads_blocked_count"
 
         const val PREF_TOTAL_BLOCKED = "total_blocked_count"
         const val PREF_YOUTUBE_BLOCKED = "youtube_blocked_count"

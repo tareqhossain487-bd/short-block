@@ -155,7 +155,7 @@ fun StatsDashboard(
                 }
             }
 
-            // Platform & Website breakdown
+            // Platform, Website & Ads breakdown
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -175,6 +175,10 @@ fun StatsDashboard(
                 PlatformStatItem(
                     label = "Websites",
                     count = uiState.websiteBlockedCount
+                )
+                PlatformStatItem(
+                    label = "Ads",
+                    count = uiState.adsBlockedCount
                 )
             }
         }

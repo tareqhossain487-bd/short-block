@@ -170,6 +170,24 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
                 } else null
             }
 
+        // Ad Blocker preferences
+        val blockAds = prefs.getBoolean(ShortsBlockerService.PREF_BLOCK_ADS, true)
+        val autoSkipAds = prefs.getBoolean(ShortsBlockerService.PREF_AUTO_SKIP_VIDEO_ADS, true)
+        val blockPopupAds = prefs.getBoolean(ShortsBlockerService.PREF_BLOCK_POPUP_ADS, true)
+        val adsBlocked = prefs.getInt(ShortsBlockerService.PREF_ADS_BLOCKED_COUNT, 0)
+        val customAdFiltersStr = prefs.getString(ShortsBlockerService.PREF_CUSTOM_AD_FILTERS, "") ?: ""
+        val customAdFilters = customAdFiltersStr.split(";")
+            .filter { it.isNotBlank() }
+            .mapNotNull { entry ->
+                val parts = entry.split("#")
+                if (parts.size >= 2) {
+                    BlockedDomain(
+                        domain = parts[0],
+                        isEnabled = parts[1].toBoolean()
+                    )
+                } else null
+            }
+
         _uiState.update {
             it.copy(
                 isMasterEnabled = masterEnabled,
@@ -209,6 +227,11 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
                 blockAdultWebsites = blockAdult,
                 customBlockedWebsites = customWebsites,
                 reminderMessage = reminderMsg,
+                blockAds = blockAds,
+                autoSkipVideoAds = autoSkipAds,
+                blockPopupAds = blockPopupAds,
+                customAdFilters = customAdFilters,
+                adsBlockedCount = adsBlocked,
                 customApps = customApps,
                 totalBlockedCount = total,
                 youtubeBlockedCount = ytCount,
@@ -358,6 +381,51 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
         _uiState.update { it.copy(customBlockedWebsites = list) }
     }
 
+    // Ad Blocker methods
+    fun setBlockAds(enabled: Boolean) {
+        prefs.edit().putBoolean(ShortsBlockerService.PREF_BLOCK_ADS, enabled).apply()
+        _uiState.update { it.copy(blockAds = enabled) }
+    }
+
+    fun setAutoSkipVideoAds(enabled: Boolean) {
+        prefs.edit().putBoolean(ShortsBlockerService.PREF_AUTO_SKIP_VIDEO_ADS, enabled).apply()
+        _uiState.update { it.copy(autoSkipVideoAds = enabled) }
+    }
+
+    fun setBlockPopupAds(enabled: Boolean) {
+        prefs.edit().putBoolean(ShortsBlockerService.PREF_BLOCK_POPUP_ADS, enabled).apply()
+        _uiState.update { it.copy(blockPopupAds = enabled) }
+    }
+
+    fun addCustomAdFilter(domain: String) {
+        val clean = domain.trim().lowercase().removePrefix("https://").removePrefix("http://").removePrefix("www.")
+        if (clean.isBlank()) return
+
+        val current = _uiState.value.customAdFilters.toMutableList()
+        if (current.none { it.domain.equals(clean, ignoreCase = true) }) {
+            current.add(BlockedDomain(domain = clean, isEnabled = true))
+            saveCustomAdFilters(current)
+        }
+    }
+
+    fun toggleCustomAdFilter(domain: String, enabled: Boolean) {
+        val current = _uiState.value.customAdFilters.map {
+            if (it.domain.equals(domain, ignoreCase = true)) it.copy(isEnabled = enabled) else it
+        }
+        saveCustomAdFilters(current)
+    }
+
+    fun removeCustomAdFilter(domain: String) {
+        val current = _uiState.value.customAdFilters.filterNot { it.domain.equals(domain, ignoreCase = true) }
+        saveCustomAdFilters(current)
+    }
+
+    private fun saveCustomAdFilters(list: List<BlockedDomain>) {
+        val serialized = list.joinToString(";") { "${it.domain}#${it.isEnabled}" }
+        prefs.edit().putString(ShortsBlockerService.PREF_CUSTOM_AD_FILTERS, serialized).apply()
+        _uiState.update { it.copy(customAdFilters = list) }
+    }
+
     fun setReminderMessage(message: String) {
         val trimmed = message.ifBlank { ShortsBlockerService.DEFAULT_REMINDER_MESSAGE }
         prefs.edit().putString(ShortsBlockerService.PREF_REMINDER_MESSAGE, trimmed).apply()
@@ -406,6 +474,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
             .putInt(ShortsBlockerService.PREF_FACEBOOK_BLOCKED, 0)
             .putInt(ShortsBlockerService.PREF_INSTAGRAM_BLOCKED, 0)
             .putInt(ShortsBlockerService.PREF_WEBSITES_BLOCKED, 0)
+            .putInt(ShortsBlockerService.PREF_ADS_BLOCKED_COUNT, 0)
             .putLong(ShortsBlockerService.PREF_LAST_BLOCKED_TIME, 0L)
             .putString(ShortsBlockerService.PREF_LAST_BLOCKED_APP, "")
             .putString(ShortsBlockerService.PREF_RECENT_LOGS, "")
@@ -424,6 +493,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
                 facebookBlockedCount = 0,
                 instagramBlockedCount = 0,
                 websiteBlockedCount = 0,
+                adsBlockedCount = 0,
                 lastBlockedTimestamp = 0L,
                 lastBlockedApp = "",
                 youtubeLimits = it.youtubeLimits.copy(appTodayUsedSeconds = 0L, shortsTodayUsedSeconds = 0L),
@@ -447,6 +517,9 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
             }
             appName.contains("Instagram", ignoreCase = true) -> {
                 editor.putInt(ShortsBlockerService.PREF_INSTAGRAM_BLOCKED, prefs.getInt(ShortsBlockerService.PREF_INSTAGRAM_BLOCKED, 0) + 1)
+            }
+            appName.contains("Ad", ignoreCase = true) || appName.contains("বিজ্ঞাপন", ignoreCase = true) -> {
+                editor.putInt(ShortsBlockerService.PREF_ADS_BLOCKED_COUNT, prefs.getInt(ShortsBlockerService.PREF_ADS_BLOCKED_COUNT, 0) + 1)
             }
             else -> {
                 editor.putInt(ShortsBlockerService.PREF_WEBSITES_BLOCKED, prefs.getInt(ShortsBlockerService.PREF_WEBSITES_BLOCKED, 0) + 1)
@@ -475,6 +548,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
         val fbCount = prefs.getInt(ShortsBlockerService.PREF_FACEBOOK_BLOCKED, 0)
         val igCount = prefs.getInt(ShortsBlockerService.PREF_INSTAGRAM_BLOCKED, 0)
         val webCount = prefs.getInt(ShortsBlockerService.PREF_WEBSITES_BLOCKED, 0)
+        val adsCount = prefs.getInt(ShortsBlockerService.PREF_ADS_BLOCKED_COUNT, 0)
         val lastTime = prefs.getLong(ShortsBlockerService.PREF_LAST_BLOCKED_TIME, 0L)
         val lastApp = prefs.getString(ShortsBlockerService.PREF_LAST_BLOCKED_APP, "") ?: ""
 
@@ -525,6 +599,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
                 facebookBlockedCount = fbCount,
                 instagramBlockedCount = igCount,
                 websiteBlockedCount = webCount,
+                adsBlockedCount = adsCount,
                 lastBlockedTimestamp = lastTime,
                 lastBlockedApp = lastApp,
                 youtubeLimits = it.youtubeLimits.copy(appTodayUsedSeconds = ytAppUsed, shortsTodayUsedSeconds = ytShortsUsed),

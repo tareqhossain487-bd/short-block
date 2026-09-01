@@ -81,6 +81,12 @@ class MainActivity : ComponentActivity() {
                     onToggleCustomWebsite = { domain, enabled -> viewModel.toggleCustomWebsite(domain, enabled) },
                     onRemoveCustomWebsite = { viewModel.removeCustomWebsite(it) },
                     onUpdateReminderMessage = { viewModel.setReminderMessage(it) },
+                    onToggleBlockAds = { viewModel.setBlockAds(it) },
+                    onToggleAutoSkipAds = { viewModel.setAutoSkipVideoAds(it) },
+                    onToggleBlockPopupAds = { viewModel.setBlockPopupAds(it) },
+                    onAddCustomAdFilter = { viewModel.addCustomAdFilter(it) },
+                    onToggleCustomAdFilter = { domain, enabled -> viewModel.toggleCustomAdFilter(domain, enabled) },
+                    onRemoveCustomAdFilter = { viewModel.removeCustomAdFilter(it) },
                     onResetStats = { viewModel.resetStats() },
                     onSimulateTest = { viewModel.simulateTestBlock(it) }
                 )
@@ -109,6 +115,12 @@ fun ShortsBlockerApp(
     onToggleCustomWebsite: (String, Boolean) -> Unit,
     onRemoveCustomWebsite: (String) -> Unit,
     onUpdateReminderMessage: (String) -> Unit,
+    onToggleBlockAds: (Boolean) -> Unit,
+    onToggleAutoSkipAds: (Boolean) -> Unit,
+    onToggleBlockPopupAds: (Boolean) -> Unit,
+    onAddCustomAdFilter: (String) -> Unit,
+    onToggleCustomAdFilter: (String, Boolean) -> Unit,
+    onRemoveCustomAdFilter: (String) -> Unit,
     onResetStats: () -> Unit,
     onSimulateTest: (String) -> Unit
 ) {
@@ -218,7 +230,20 @@ fun ShortsBlockerApp(
                     )
                 }
 
-                // 6. Recent Blocking History & Test Simulator
+                // 6. AdBlocker: Video Ads Auto-Skip, Popup Blocker & Custom Ad Filter
+                item {
+                    AdBlockerCard(
+                        uiState = uiState,
+                        onToggleBlockAds = onToggleBlockAds,
+                        onToggleAutoSkipAds = onToggleAutoSkipAds,
+                        onToggleBlockPopupAds = onToggleBlockPopupAds,
+                        onAddCustomAdFilter = onAddCustomAdFilter,
+                        onToggleCustomAdFilter = onToggleCustomAdFilter,
+                        onRemoveCustomAdFilter = onRemoveCustomAdFilter
+                    )
+                }
+
+                // 7. Recent Blocking History & Test Simulator
                 item {
                     RecentActivityCard(
                         events = uiState.recentEvents,
@@ -226,7 +251,7 @@ fun ShortsBlockerApp(
                     )
                 }
 
-                // 7. Setup & Accessibility Step-by-Step Guide
+                // 8. Setup & Accessibility Step-by-Step Guide
                 item {
                     SetupGuideCard(
                         onOpenSettings = onOpenAccessibilitySettings
