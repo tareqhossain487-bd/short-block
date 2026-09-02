@@ -16,6 +16,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.HourglassBottom
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Public
@@ -54,6 +56,7 @@ fun AppAndShortsDailyLimitCard(
     onResetShortsUsage: (String) -> Unit,
     onToggleCustomApp: (String, Boolean) -> Unit = { _, _ -> },
     onRemoveCustomApp: (String) -> Unit = {},
+    onToggleShowBlockToast: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // List of selectable apps: built-in (YouTube, Facebook, Instagram) + Custom Apps
@@ -350,6 +353,63 @@ fun AppAndShortsDailyLimitCard(
                                 text = "🔒 দৈনিক সীমা শেষ হলে রাত ১২:০০ টার আগে আর খোলা যাবে না (রিসেট বাটন ছাড়া)। রিসেন্ট অ্যাপস থেকে ক্লিয়ার করলেও ব্লকার সক্রিয় থাকবে।",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+
+                    // Block Alert / Toast Message Toggle
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (uiState.showBlockToast) IndigoPrimary.copy(alpha = 0.15f)
+                                            else MaterialTheme.colorScheme.surfaceVariant
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (uiState.showBlockToast) Icons.Default.Notifications else Icons.Default.NotificationsOff,
+                                        contentDescription = null,
+                                        tint = if (uiState.showBlockToast) IndigoPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Column {
+                                    Text(
+                                        text = "ব্লক ও লিমিট শেষ হওয়ার পপআপ মেসেজ",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (uiState.showBlockToast) "স্ক্রিনে পপআপ নোটিফিকেশন আসবে" else "নীরবে ব্যাকগ্রাউন্ডে ব্লক হবে (মেসেজ বন্ধ)",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = uiState.showBlockToast,
+                                onCheckedChange = onToggleShowBlockToast,
+                                modifier = Modifier.testTag("toggle_block_toast_switch")
                             )
                         }
                     }

@@ -73,6 +73,7 @@ data class ShortsBlockerUiState(
     val blockPopupAds: Boolean = true,
     val customAdFilters: List<BlockedDomain> = emptyList(),
     val adsBlockedCount: Int = 0,
+    val showBlockToast: Boolean = false,
     val installedApps: List<InstalledAppItem> = emptyList(),
     val isLoadingApps: Boolean = false,
     val totalBlockedCount: Int = 0,

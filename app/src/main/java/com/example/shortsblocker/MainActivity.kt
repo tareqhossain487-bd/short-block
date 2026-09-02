@@ -92,7 +92,8 @@ class MainActivity : ComponentActivity() {
                     onToggleCustomAdFilter = { domain, enabled -> viewModel.toggleCustomAdFilter(domain, enabled) },
                     onRemoveCustomAdFilter = { viewModel.removeCustomAdFilter(it) },
                     onResetStats = { viewModel.resetStats() },
-                    onSimulateTest = { viewModel.simulateTestBlock(it) }
+                    onSimulateTest = { viewModel.simulateTestBlock(it) },
+                    onToggleShowBlockToast = { viewModel.setShowBlockToast(it) }
                 )
             }
         }
@@ -126,7 +127,8 @@ fun ShortsBlockerApp(
     onToggleCustomAdFilter: (String, Boolean) -> Unit,
     onRemoveCustomAdFilter: (String) -> Unit,
     onResetStats: () -> Unit,
-    onSimulateTest: (String) -> Unit
+    onSimulateTest: (String) -> Unit,
+    onToggleShowBlockToast: (Boolean) -> Unit = {}
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -197,7 +199,8 @@ fun ShortsBlockerApp(
                         onResetAppUsage = onResetAppUsage,
                         onResetShortsUsage = onResetShortsUsage,
                         onToggleCustomApp = onToggleCustomApp,
-                        onRemoveCustomApp = onRemoveCustomApp
+                        onRemoveCustomApp = onRemoveCustomApp,
+                        onToggleShowBlockToast = onToggleShowBlockToast
                     )
                 }
 

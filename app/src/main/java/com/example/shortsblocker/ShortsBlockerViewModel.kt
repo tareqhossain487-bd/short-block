@@ -44,7 +44,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
             while (isActive) {
                 checkAccessibilityStatus()
                 syncStatistics()
-                delay(1500)
+                delay(3000)
             }
         }
     }
@@ -176,6 +176,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
         val autoSkipAds = prefs.getBoolean(ShortsBlockerService.PREF_AUTO_SKIP_VIDEO_ADS, true)
         val blockPopupAds = prefs.getBoolean(ShortsBlockerService.PREF_BLOCK_POPUP_ADS, true)
         val adsBlocked = prefs.getInt(ShortsBlockerService.PREF_ADS_BLOCKED_COUNT, 0)
+        val showBlockToast = prefs.getBoolean(ShortsBlockerService.PREF_SHOW_BLOCK_TOAST, false)
         val customAdFiltersStr = prefs.getString(ShortsBlockerService.PREF_CUSTOM_AD_FILTERS, "") ?: ""
         val customAdFilters = customAdFiltersStr.split(";")
             .filter { it.isNotBlank() }
@@ -233,6 +234,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
                 blockPopupAds = blockPopupAds,
                 customAdFilters = customAdFilters,
                 adsBlockedCount = adsBlocked,
+                showBlockToast = showBlockToast,
                 customApps = customApps,
                 totalBlockedCount = total,
                 youtubeBlockedCount = ytCount,
@@ -433,6 +435,11 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
         _uiState.update { it.copy(reminderMessage = trimmed) }
     }
 
+    fun setShowBlockToast(enabled: Boolean) {
+        prefs.edit().putBoolean(ShortsBlockerService.PREF_SHOW_BLOCK_TOAST, enabled).apply()
+        _uiState.update { it.copy(showBlockToast = enabled) }
+    }
+
     fun setMasterEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(ShortsBlockerService.PREF_ENABLED, enabled).apply()
         _uiState.update { it.copy(isMasterEnabled = enabled) }
@@ -613,7 +620,14 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    private var lastDateCheckTime: Long = 0L
+
     private fun checkAndResetDailyUsage() {
+        val now = System.currentTimeMillis()
+        if (now - lastDateCheckTime < 60_000L) {
+            return
+        }
+        lastDateCheckTime = now
         val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
         val savedDate = prefs.getString(ShortsBlockerService.PREF_TODAY_DATE, "") ?: ""
         if (savedDate.isBlank()) {

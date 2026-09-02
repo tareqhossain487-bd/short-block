@@ -30,6 +30,14 @@ class ShortsBlockerService : AccessibilityService() {
     private var lastBackActionTimestamp: Long = 0L
     private var lastHomeActionTimestamp: Long = 0L
     private var lastToastTimestamp: Long = 0L
+    private var lastDateCheckTime: Long = 0L
+    private var lastBrowserCheckTimestamp: Long = 0L
+    private var lastAdSkipCheckTime: Long = 0L
+    private var lastFlushTime: Long = 0L
+
+    // In-memory usage buffers to eliminate continuous SharedPreferences disk I/O
+    private val bufferedAppSeconds = mutableMapOf<String, Long>()
+    private val bufferedShortsSeconds = mutableMapOf<String, Long>()
 
     @Volatile
     private var activeForegroundPackage: String = ""
@@ -147,22 +155,23 @@ class ShortsBlockerService : AccessibilityService() {
         "clipsvieweractivity"
     )
 
-    // 1-second continuous foreground ticker to ensure time tracking always happens
-    // even during long video playback where no accessibility events are triggered
+    // Dynamic foreground ticker to ensure time tracking always happens
+    // while running at low power when idle or screen is off
     private val tickerRunnable = object : Runnable {
         override fun run() {
+            var nextDelay = 1000L
             try {
-                onTickerTick()
+                nextDelay = onTickerTick()
             } catch (_: Exception) {
             }
-            mainHandler.postDelayed(this, 1000L)
+            mainHandler.postDelayed(this, nextDelay)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        checkAndResetDailyUsage()
+        checkAndResetDailyUsage(force = true)
         ensureTickerRunning()
     }
 
@@ -177,29 +186,68 @@ class ShortsBlockerService : AccessibilityService() {
 
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
         super.onTaskRemoved(rootIntent)
+        flushPendingUsageToPrefs()
         ensureTickerRunning()
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        checkAndResetDailyUsage()
+        checkAndResetDailyUsage(force = true)
         ensureTickerRunning()
     }
 
     override fun onInterrupt() {
-        // Keep running ticker even if accessibility is temporarily interrupted
-        ensureTickerRunning()
+        flushPendingUsageToPrefs()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        ensureTickerRunning()
+        flushPendingUsageToPrefs()
+        mainHandler.removeCallbacks(tickerRunnable)
     }
 
     private fun ensureTickerRunning() {
         mainHandler.removeCallbacks(tickerRunnable)
         mainHandler.post(tickerRunnable)
+    }
+
+    private fun flushPendingUsageToPrefs() {
+        if (!::prefs.isInitialized) return
+        if (bufferedAppSeconds.isEmpty() && bufferedShortsSeconds.isEmpty()) return
+        val editor = prefs.edit()
+        var hasChanges = false
+        for ((key, added) in bufferedAppSeconds) {
+            if (added > 0) {
+                val current = prefs.getLong("app_used_sec_$key", 0L)
+                editor.putLong("app_used_sec_$key", current + added)
+                hasChanges = true
+            }
+        }
+        for ((key, added) in bufferedShortsSeconds) {
+            if (added > 0) {
+                val current = prefs.getLong("shorts_used_sec_$key", 0L)
+                editor.putLong("shorts_used_sec_$key", current + added)
+                hasChanges = true
+            }
+        }
+        bufferedAppSeconds.clear()
+        bufferedShortsSeconds.clear()
+        if (hasChanges) {
+            editor.apply()
+        }
+    }
+
+    private fun getEffectiveAppUsedSeconds(appKey: String): Long {
+        val saved = prefs.getLong("app_used_sec_$appKey", 0L)
+        val buffered = bufferedAppSeconds[appKey] ?: 0L
+        return saved + buffered
+    }
+
+    private fun getEffectiveShortsUsedSeconds(appKey: String): Long {
+        val saved = prefs.getLong("shorts_used_sec_$appKey", 0L)
+        val buffered = bufferedShortsSeconds[appKey] ?: 0L
+        return saved + buffered
     }
 
     private fun getTrackedAppInfo(pkg: String): TrackedAppInfo? {
@@ -247,9 +295,10 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     /**
-     * Executes every 1 second to reliably record seconds used and enforce limits
+     * Dynamic ticker: 1000ms when inside tracked app, 2500-3000ms when idle or screen off.
+     * Buffers disk I/O and only inspects nodes when necessary.
      */
-    private fun onTickerTick() {
+    private fun onTickerTick(): Long {
         if (!::prefs.isInitialized) {
             prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         }
@@ -257,41 +306,43 @@ class ShortsBlockerService : AccessibilityService() {
         checkAndResetDailyUsage()
 
         val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
-        if (!isMasterEnabled) return
+        if (!isMasterEnabled) {
+            flushPendingUsageToPrefs()
+            return 3000L
+        }
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         if (powerManager?.isInteractive == false) {
-            return
+            flushPendingUsageToPrefs()
+            return 3000L
         }
 
-        val root = try { rootInActiveWindow } catch (_: Exception) { null }
-        val rootPkg = root?.packageName?.toString() ?: ""
-        val now = SystemClock.elapsedRealtime()
-
-        val currentPkg = when {
-            rootPkg.isNotBlank() && !isIgnoredSystemPackage(rootPkg) -> {
-                activeForegroundPackage = rootPkg
-                rootPkg
-            }
-            activeForegroundPackage.isNotBlank() -> activeForegroundPackage
-            else -> ""
+        val currentPkg = activeForegroundPackage
+        if (currentPkg.isBlank() || isIgnoredSystemPackage(currentPkg)) {
+            flushPendingUsageToPrefs()
+            return 2500L
         }
 
-        if (currentPkg.isBlank()) return
+        val trackedApp = getTrackedAppInfo(currentPkg)
+        if (trackedApp == null) {
+            flushPendingUsageToPrefs()
+            return 2500L
+        }
 
-        val trackedApp = getTrackedAppInfo(currentPkg) ?: return
         val appKey = trackedApp.appKey
         val appLabel = trackedApp.appLabel
+        val now = SystemClock.elapsedRealtime()
 
-        // 1. Increment this app's daily used seconds
+        // 1. Increment this app's daily used seconds in memory buffer
+        bufferedAppSeconds[appKey] = (bufferedAppSeconds[appKey] ?: 0L) + 1L
+        val currentAppUsed = getEffectiveAppUsedSeconds(appKey)
+
         val appPrefLimitKey = "app_limit_$appKey"
-        val appPrefUsedKey = "app_used_sec_$appKey"
         val appLimitMinutes = prefs.getInt(appPrefLimitKey, 0)
-        val currentAppUsed = prefs.getLong(appPrefUsedKey, 0L) + 1L
-        prefs.edit().putLong(appPrefUsedKey, currentAppUsed).apply()
 
         // 2. Check if App Limit is exceeded
         if (appLimitMinutes > 0 && currentAppUsed >= (appLimitMinutes * 60L)) {
+            flushPendingUsageToPrefs()
             performGlobalAction(GLOBAL_ACTION_HOME)
             performGlobalAction(GLOBAL_ACTION_BACK)
             activeForegroundPackage = ""
@@ -300,54 +351,63 @@ class ShortsBlockerService : AccessibilityService() {
                 showAppLimitToast(appLabel, appLimitMinutes)
                 recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", currentPkg)
             }
-            return
+            return 2500L
         }
 
         // 3. If it's YouTube / Facebook / Instagram, track Shorts / Reels time
-        if (!trackedApp.isCustomApp && root != null) {
-            val isShortsOpen = when (appKey) {
-                "youtube" -> isYouTubeShortsPlayerActive(root)
-                "facebook" -> isFacebookReelsPlayerActive(root)
-                "instagram" -> isInstagramReelsPlayerActive(root)
-                else -> false
-            }
+        // Only inspect if Shorts limit is not set to unlimited (-1)
+        val shortsPrefLimitKey = "shorts_limit_$appKey"
+        val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0) // -1: Unlimited, 0: Block (Off), >0: Mins
 
-            if (isShortsOpen) {
-                val shortsPrefLimitKey = "shorts_limit_$appKey"
-                val shortsPrefUsedKey = "shorts_used_sec_$appKey"
-                val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0) // -1: Unlimited, 0: Block (Off), >0: Mins
+        if (!trackedApp.isCustomApp && shortsLimitMinutes != -1) {
+            val root = try { rootInActiveWindow } catch (_: Exception) { null }
+            if (root != null) {
+                val isShortsOpen = when (appKey) {
+                    "youtube" -> isYouTubeShortsPlayerActive(root)
+                    "facebook" -> isFacebookReelsPlayerActive(root)
+                    "instagram" -> isInstagramReelsPlayerActive(root)
+                    else -> false
+                }
 
-                val currentShortsUsed = prefs.getLong(shortsPrefUsedKey, 0L) + 1L
-                prefs.edit().putLong(shortsPrefUsedKey, currentShortsUsed).apply()
+                if (isShortsOpen) {
+                    bufferedShortsSeconds[appKey] = (bufferedShortsSeconds[appKey] ?: 0L) + 1L
+                    val currentShortsUsed = getEffectiveShortsUsedSeconds(appKey)
 
-                // If shortsLimitMinutes == -1 (Unlimited), do NOT block.
-                // If shortsLimitMinutes == 0 (Block), block immediately.
-                // If shortsLimitMinutes > 0, block when used >= limit.
-                if (shortsLimitMinutes != -1 && (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L))) {
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                    if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
-                        lastBackActionTimestamp = now
-                        val shortLabel = when (appKey) {
-                            "youtube" -> "YouTube Shorts"
-                            "facebook" -> "Facebook Reels"
-                            "instagram" -> "Instagram Reels"
-                            else -> appLabel
-                        }
-                        showShortsLimitToast(shortLabel, shortsLimitMinutes)
-                        recordBlockEvent(shortLabel, currentPkg)
-                    }
-                    // Fail-safe: if still on Shorts after pressing BACK, kick to Home
-                    mainHandler.postDelayed({
-                        try {
-                            val currentRoot = rootInActiveWindow
-                            if (currentRoot != null && isYouTubeShortsPlayerActive(currentRoot)) {
-                                performGlobalAction(GLOBAL_ACTION_HOME)
+                    if (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L)) {
+                        flushPendingUsageToPrefs()
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                        if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
+                            lastBackActionTimestamp = now
+                            val shortLabel = when (appKey) {
+                                "youtube" -> "YouTube Shorts"
+                                "facebook" -> "Facebook Reels"
+                                "instagram" -> "Instagram Reels"
+                                else -> appLabel
                             }
-                        } catch (_: Exception) {}
-                    }, 250L)
+                            showShortsLimitToast(shortLabel, shortsLimitMinutes)
+                            recordBlockEvent(shortLabel, currentPkg)
+                        }
+                        // Fail-safe: if still on Shorts after pressing BACK, kick to Home
+                        mainHandler.postDelayed({
+                            try {
+                                val currentRoot = rootInActiveWindow
+                                if (currentRoot != null && isYouTubeShortsPlayerActive(currentRoot)) {
+                                    performGlobalAction(GLOBAL_ACTION_HOME)
+                                }
+                            } catch (_: Exception) {}
+                        }, 250L)
+                    }
                 }
             }
         }
+
+        // Periodically flush buffer to disk every 10 seconds to save battery
+        if (now - lastFlushTime >= 10_000L) {
+            lastFlushTime = now
+            flushPendingUsageToPrefs()
+        }
+
+        return 1000L
     }
 
     private fun isIgnoredSystemPackage(pkg: String): Boolean {
@@ -368,94 +428,128 @@ class ShortsBlockerService : AccessibilityService() {
         val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
         if (!isMasterEnabled) return
 
-        ensureTickerRunning()
-        checkAndResetDailyUsage()
-
         val packageName = event.packageName?.toString() ?: return
+        if (packageName.isBlank() || isIgnoredSystemPackage(packageName)) return
 
-        if (!isIgnoredSystemPackage(packageName)) {
+        val eventType = event.eventType
+        val isWindowStateChange = (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+
+        if (isWindowStateChange && packageName != activeForegroundPackage) {
+            flushPendingUsageToPrefs()
             activeForegroundPackage = packageName
             lastPackageEventTime = SystemClock.elapsedRealtime()
+            if (getTrackedAppInfo(packageName) != null) {
+                ensureTickerRunning()
+            }
         }
 
-        // 1. Check if event is in a Web Browser for Adult/Porn Sites or Custom Blocked Domains or Ads
+        // Fast rejection: If not browser and not tracked app, ignore immediately! Zero tree inspection.
         val isBrowser = browserPackages.any { packageName.contains(it, ignoreCase = true) }
-        if (isBrowser) {
-            handleBrowserEvent(packageName)
+        val trackedApp = getTrackedAppInfo(packageName)
+        if (!isBrowser && trackedApp == null) {
             return
         }
 
-        // 2. Try auto-skipping video ads if enabled
-        val eventClassName = event.className?.toString() ?: ""
-        val root: AccessibilityNodeInfo? = rootInActiveWindow ?: event.source
-        if (root != null) {
-            tryAutoSkipAds(root, packageName)
-        }
+        checkAndResetDailyUsage()
 
-        // 3. Check for Tracked Apps
-        val trackedApp = getTrackedAppInfo(packageName) ?: return
-        val appKey = trackedApp.appKey
-        val appLabel = trackedApp.appLabel
-        val isCustomApp = trackedApp.isCustomApp
-
-        val now = SystemClock.elapsedRealtime()
-
-        // Immediate check: If this app's App Limit is already exceeded, kick user out to Home
-        val appLimitMinutes = prefs.getInt("app_limit_$appKey", 0)
-        val todayAppUsedSeconds = prefs.getLong("app_used_sec_$appKey", 0L)
-        if (appLimitMinutes > 0 && todayAppUsedSeconds >= (appLimitMinutes * 60L)) {
-            performGlobalAction(GLOBAL_ACTION_HOME)
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            activeForegroundPackage = ""
-            if (now - lastHomeActionTimestamp >= 2000L) {
-                lastHomeActionTimestamp = now
-                showAppLimitToast(appLabel, appLimitMinutes)
-                recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", packageName)
+        // 1. Check if event is in a Web Browser for Adult/Porn Sites or Custom Blocked Domains or Ads
+        if (isBrowser) {
+            val now = SystemClock.elapsedRealtime()
+            if (isWindowStateChange || now - lastBrowserCheckTimestamp >= 800L) {
+                lastBrowserCheckTimestamp = now
+                handleBrowserEvent(packageName)
             }
             return
         }
 
-        val isShortsOpen = when {
-            isCustomApp -> true
-            root != null && packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root, eventClassName)
-            root != null && (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) -> isFacebookReelsPlayerActive(root, eventClassName)
-            root != null && packageName.contains("instagram") -> isInstagramReelsPlayerActive(root, eventClassName)
-            packageName.contains("youtube") && (eventClassName.contains("ReelWatchActivity", ignoreCase = true) || eventClassName.contains("ShortsActivity", ignoreCase = true)) -> true
-            packageName.contains("instagram") && eventClassName.contains("ClipsViewerActivity", ignoreCase = true) -> true
-            (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) && eventClassName.contains("ReelsViewerActivity", ignoreCase = true) -> true
-            else -> false
+        // 2. Try auto-skipping video ads if enabled (ONLY for YouTube and Facebook, throttled to 2 seconds)
+        if (trackedApp != null && (packageName.contains("youtube") || packageName.contains("facebook"))) {
+            val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
+            if (autoSkip) {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastAdSkipCheckTime >= 2000L) {
+                    lastAdSkipCheckTime = now
+                    val root: AccessibilityNodeInfo? = event.source ?: try { rootInActiveWindow } catch (_: Exception) { null }
+                    if (root != null) {
+                        tryAutoSkipAds(root, packageName)
+                    }
+                }
+            }
         }
 
-        if (isShortsOpen) {
-            val shortsPrefLimitKey = "shorts_limit_$appKey"
-            val shortsPrefUsedKey = "shorts_used_sec_$appKey"
-            val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0)
-            val todayShortsUsedSeconds = prefs.getLong(shortsPrefUsedKey, 0L)
+        // 3. Check for Tracked Apps
+        if (trackedApp != null) {
+            val appKey = trackedApp.appKey
+            val appLabel = trackedApp.appLabel
+            val isCustomApp = trackedApp.isCustomApp
 
-            // -1 = Unlimited (no block), 0 = Block, > 0 = time limit
-            if (shortsLimitMinutes != -1 && (shortsLimitMinutes == 0 || todayShortsUsedSeconds >= (shortsLimitMinutes * 60L))) {
+            val now = SystemClock.elapsedRealtime()
+
+            // Immediate check: If this app's App Limit is already exceeded, kick user out to Home
+            val appLimitMinutes = prefs.getInt("app_limit_$appKey", 0)
+            val todayAppUsedSeconds = getEffectiveAppUsedSeconds(appKey)
+            if (appLimitMinutes > 0 && todayAppUsedSeconds >= (appLimitMinutes * 60L)) {
+                flushPendingUsageToPrefs()
+                performGlobalAction(GLOBAL_ACTION_HOME)
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
-                    lastBackActionTimestamp = now
-                    val shortLabel = when (appKey) {
-                        "youtube" -> "YouTube Shorts"
-                        "facebook" -> "Facebook Reels"
-                        "instagram" -> "Instagram Reels"
-                        else -> appLabel
-                    }
-                    showShortsLimitToast(shortLabel, shortsLimitMinutes)
-                    recordBlockEvent(shortLabel, packageName)
+                activeForegroundPackage = ""
+                if (now - lastHomeActionTimestamp >= 2000L) {
+                    lastHomeActionTimestamp = now
+                    showAppLimitToast(appLabel, appLimitMinutes)
+                    recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", packageName)
+                }
+                return
+            }
+
+            val shortsPrefLimitKey = "shorts_limit_$appKey"
+            val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0)
+
+            // Only check shorts if shorts limit is not unlimited (-1)
+            if (shortsLimitMinutes != -1) {
+                val eventClassName = event.className?.toString() ?: ""
+                val root: AccessibilityNodeInfo? = event.source ?: try { rootInActiveWindow } catch (_: Exception) { null }
+
+                val isShortsOpen = when {
+                    isCustomApp -> true
+                    root != null && packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root, eventClassName)
+                    root != null && (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) -> isFacebookReelsPlayerActive(root, eventClassName)
+                    root != null && packageName.contains("instagram") -> isInstagramReelsPlayerActive(root, eventClassName)
+                    packageName.contains("youtube") && (eventClassName.contains("ReelWatchActivity", ignoreCase = true) || eventClassName.contains("ShortsActivity", ignoreCase = true)) -> true
+                    packageName.contains("instagram") && eventClassName.contains("ClipsViewerActivity", ignoreCase = true) -> true
+                    (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) && eventClassName.contains("ReelsViewerActivity", ignoreCase = true) -> true
+                    else -> false
                 }
 
-                // Fail-safe: if still on Shorts after pressing BACK, kick to Home
-                mainHandler.postDelayed({
-                    try {
-                        val currentRoot = rootInActiveWindow
-                        if (currentRoot != null && isYouTubeShortsPlayerActive(currentRoot)) {
-                            performGlobalAction(GLOBAL_ACTION_HOME)
+                if (isShortsOpen) {
+                    val todayShortsUsedSeconds = getEffectiveShortsUsedSeconds(appKey)
+
+                    // -1 = Unlimited (no block), 0 = Block, > 0 = time limit
+                    if (shortsLimitMinutes == 0 || todayShortsUsedSeconds >= (shortsLimitMinutes * 60L)) {
+                        flushPendingUsageToPrefs()
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                        if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
+                            lastBackActionTimestamp = now
+                            val shortLabel = when (appKey) {
+                                "youtube" -> "YouTube Shorts"
+                                "facebook" -> "Facebook Reels"
+                                "instagram" -> "Instagram Reels"
+                                else -> appLabel
+                            }
+                            showShortsLimitToast(shortLabel, shortsLimitMinutes)
+                            recordBlockEvent(shortLabel, packageName)
                         }
-                    } catch (_: Exception) {}
-                }, 250L)
+
+                        // Fail-safe: if still on Shorts after pressing BACK, kick to Home
+                        mainHandler.postDelayed({
+                            try {
+                                val currentRoot = rootInActiveWindow
+                                if (currentRoot != null && isYouTubeShortsPlayerActive(currentRoot)) {
+                                    performGlobalAction(GLOBAL_ACTION_HOME)
+                                }
+                            } catch (_: Exception) {}
+                        }, 250L)
+                    }
+                }
             }
         }
     }
@@ -525,7 +619,7 @@ class ShortsBlockerService : AccessibilityService() {
         keywords: List<String>,
         depth: Int = 0
     ): AccessibilityNodeInfo? {
-        if (depth > 30) return null
+        if (depth > 14) return null
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase() ?: ""
@@ -550,7 +644,7 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     private fun findBrowserUrlOrKeywords(node: AccessibilityNodeInfo, depth: Int = 0): String? {
-        if (depth > 25) return null
+        if (depth > 12) return null
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase() ?: ""
@@ -588,6 +682,9 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     private fun showAppLimitToast(appName: String, limitMinutes: Int) {
+        val showToast = prefs.getBoolean(PREF_SHOW_BLOCK_TOAST, false)
+        if (!showToast) return
+
         val now = SystemClock.elapsedRealtime()
         if (now - lastToastTimestamp < 2500L) return
         lastToastTimestamp = now
@@ -602,6 +699,9 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     private fun showShortsLimitToast(shortLabel: String, limitMinutes: Int) {
+        val showToast = prefs.getBoolean(PREF_SHOW_BLOCK_TOAST, false)
+        if (!showToast) return
+
         val now = SystemClock.elapsedRealtime()
         if (now - lastToastTimestamp < 2500L) return
         lastToastTimestamp = now
@@ -620,7 +720,12 @@ class ShortsBlockerService : AccessibilityService() {
         }
     }
 
-    private fun checkAndResetDailyUsage() {
+    private fun checkAndResetDailyUsage(force: Boolean = false) {
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastDateCheckTime < 60_000L) {
+            return
+        }
+        lastDateCheckTime = now
         val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val savedDate = prefs.getString(PREF_TODAY_DATE, "") ?: ""
         if (savedDate.isBlank()) {
@@ -629,6 +734,7 @@ class ShortsBlockerService : AccessibilityService() {
             return
         }
         if (savedDate != todayStr) {
+            flushPendingUsageToPrefs()
             // Midnight (12:00 AM) has passed! New calendar day reset
             val editor = prefs.edit().putString(PREF_TODAY_DATE, todayStr)
             // Reset built-in apps usage
@@ -676,7 +782,7 @@ class ShortsBlockerService : AccessibilityService() {
         textKeywords: List<String> = emptyList(),
         depth: Int = 0
     ): Boolean {
-        if (depth > 40) return false
+        if (depth > 16) return false
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val className = node.className?.toString()?.lowercase() ?: ""
@@ -789,6 +895,7 @@ class ShortsBlockerService : AccessibilityService() {
         const val PREF_LAST_BLOCKED_APP = "last_blocked_app"
         const val PREF_RECENT_LOGS = "recent_logs"
         const val PREF_TODAY_DATE = "today_date"
+        const val PREF_SHOW_BLOCK_TOAST = "show_block_toast"
 
         private const val THROTTLE_INTERVAL_MS = 800L
     }
