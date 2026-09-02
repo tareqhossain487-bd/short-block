@@ -1,14 +1,21 @@
 package com.example.shortsblocker
 
 import android.accessibilityservice.AccessibilityService
+import android.app.AlarmManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -171,28 +178,49 @@ class ShortsBlockerService : AccessibilityService() {
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        startForegroundNotification()
         checkAndResetDailyUsage(force = true)
         ensureTickerRunning()
     }
 
-    override fun onStartCommand(intent: android.content.Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!::prefs.isInitialized) {
             prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         }
+        startForegroundNotification()
         checkAndResetDailyUsage()
         ensureTickerRunning()
         return START_STICKY
     }
 
-    override fun onTaskRemoved(rootIntent: android.content.Intent?) {
+    override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
         flushPendingUsageToPrefs()
+        startForegroundNotification()
         ensureTickerRunning()
+
+        // Resurrect service if process is terminated by OS task cleanup
+        try {
+            val restartServiceIntent = Intent(applicationContext, ShortsBlockerService::class.java)
+            val restartPendingIntent = PendingIntent.getService(
+                applicationContext,
+                1,
+                restartServiceIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
+            )
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+            alarmManager?.set(
+                AlarmManager.ELAPSED_REALTIME,
+                SystemClock.elapsedRealtime() + 1000L,
+                restartPendingIntent
+            )
+        } catch (_: Exception) {}
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        startForegroundNotification()
         checkAndResetDailyUsage(force = true)
         ensureTickerRunning()
     }
@@ -205,6 +233,52 @@ class ShortsBlockerService : AccessibilityService() {
         super.onDestroy()
         flushPendingUsageToPrefs()
         mainHandler.removeCallbacks(tickerRunnable)
+    }
+
+    private fun startForegroundNotification() {
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notificationManager != null) {
+                val channel = NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    "Shorts Blocker Service",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Shorts Blocker background protection"
+                    setShowBadge(false)
+                }
+                notificationManager.createNotificationChannel(channel)
+            }
+
+            val launchIntent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                launchIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("🛡️ Shorts Blocker সক্রিয় রয়েছে")
+                .setContentText("ব্যাকগ্রাউন্ডে লিমিট ও শর্টস ট্র্যাকিং চলছে")
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (_: Exception) {}
     }
 
     private fun ensureTickerRunning() {
@@ -260,14 +334,14 @@ class ShortsBlockerService : AccessibilityService() {
         if (!isMasterEnabled) return null
 
         return when {
-            pkg.contains("youtube") && prefs.getBoolean(PREF_BLOCK_YOUTUBE, true) -> {
+            pkg.contains("youtube") && (prefs.getBoolean(PREF_BLOCK_YOUTUBE, true) || prefs.getInt("app_limit_youtube", 0) > 0 || prefs.getInt("shorts_limit_youtube", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "youtube", appLabel = "YouTube", packageName = pkg, isCustomApp = false)
             }
             (pkg.contains("facebook.katana") || pkg.contains("facebook.lite")) &&
-                    prefs.getBoolean(PREF_BLOCK_FACEBOOK, true) -> {
+                    (prefs.getBoolean(PREF_BLOCK_FACEBOOK, true) || prefs.getInt("app_limit_facebook", 0) > 0 || prefs.getInt("shorts_limit_facebook", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "facebook", appLabel = "Facebook", packageName = pkg, isCustomApp = false)
             }
-            pkg.contains("instagram") && prefs.getBoolean(PREF_BLOCK_INSTAGRAM, true) -> {
+            pkg.contains("instagram") && (prefs.getBoolean(PREF_BLOCK_INSTAGRAM, true) || prefs.getInt("app_limit_instagram", 0) > 0 || prefs.getInt("shorts_limit_instagram", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "instagram", appLabel = "Instagram", packageName = pkg, isCustomApp = false)
             }
             else -> {
@@ -317,16 +391,25 @@ class ShortsBlockerService : AccessibilityService() {
             return 3000L
         }
 
-        val currentPkg = activeForegroundPackage
+        var currentPkg = activeForegroundPackage
+        if (currentPkg.isBlank() || isIgnoredSystemPackage(currentPkg)) {
+            val root = try { rootInActiveWindow } catch (_: Exception) { null }
+            val rootPkg = root?.packageName?.toString() ?: ""
+            if (rootPkg.isNotBlank() && !isIgnoredSystemPackage(rootPkg)) {
+                activeForegroundPackage = rootPkg
+                currentPkg = rootPkg
+            }
+        }
+
         if (currentPkg.isBlank() || isIgnoredSystemPackage(currentPkg)) {
             flushPendingUsageToPrefs()
-            return 2500L
+            return 2000L
         }
 
         val trackedApp = getTrackedAppInfo(currentPkg)
         if (trackedApp == null) {
             flushPendingUsageToPrefs()
-            return 2500L
+            return 2000L
         }
 
         val appKey = trackedApp.appKey
@@ -434,7 +517,7 @@ class ShortsBlockerService : AccessibilityService() {
         val eventType = event.eventType
         val isWindowStateChange = (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
 
-        if (isWindowStateChange && packageName != activeForegroundPackage) {
+        if (packageName != activeForegroundPackage) {
             flushPendingUsageToPrefs()
             activeForegroundPackage = packageName
             lastPackageEventTime = SystemClock.elapsedRealtime()
@@ -782,7 +865,7 @@ class ShortsBlockerService : AccessibilityService() {
         textKeywords: List<String> = emptyList(),
         depth: Int = 0
     ): Boolean {
-        if (depth > 16) return false
+        if (depth > 28) return false
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val className = node.className?.toString()?.lowercase() ?: ""
@@ -896,6 +979,9 @@ class ShortsBlockerService : AccessibilityService() {
         const val PREF_RECENT_LOGS = "recent_logs"
         const val PREF_TODAY_DATE = "today_date"
         const val PREF_SHOW_BLOCK_TOAST = "show_block_toast"
+
+        const val NOTIFICATION_ID = 1001
+        const val NOTIFICATION_CHANNEL_ID = "shorts_blocker_service_channel"
 
         private const val THROTTLE_INTERVAL_MS = 800L
     }

@@ -42,8 +42,19 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         try {
-            startService(Intent(this, ShortsBlockerService::class.java))
+            val serviceIntent = Intent(this, ShortsBlockerService::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
         } catch (_: Exception) {}
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
 
         setContent {
             ShortsBlockerTheme {
