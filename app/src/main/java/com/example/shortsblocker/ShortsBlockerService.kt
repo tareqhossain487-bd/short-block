@@ -1,6 +1,7 @@
 package com.example.shortsblocker
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -37,6 +38,7 @@ class ShortsBlockerService : AccessibilityService() {
     private var lastBackActionTimestamp: Long = 0L
     private var lastHomeActionTimestamp: Long = 0L
     private var lastToastTimestamp: Long = 0L
+    private var lastAdSkipRecordTime: Long = 0L
     private var lastDateCheckTime: Long = 0L
     private var lastBrowserCheckTimestamp: Long = 0L
     private var lastAdSkipCheckTime: Long = 0L
@@ -51,28 +53,34 @@ class ShortsBlockerService : AccessibilityService() {
     @Volatile
     private var lastPackageEventTime: Long = 0L
 
-    // Adult keywords and popular porn domain substrings
-    private val adultKeywords = listOf(
-        "porn", "xxx", "xvideos", "pornhub", "xnxx", "xhamster", "redtube",
-        "youporn", "brazzers", "sex", "nude", "erotic", "nsfw", "cam4",
-        "chaturbate", "onlyfans", "bangbros", "adultdvd", "eporner", "beeg",
-        "hqporner", "tnaflix", "tube8", "spankwire", "daftsex", "vporn", "leakgirls"
+    // Specific adult domains and explicit porn keywords (avoiding substrings that collide with normal words)
+    private val adultDomainsAndKeywords = listOf(
+        "pornhub", "xvideos", "xnxx", "xhamster", "redtube", "youporn",
+        "brazzers", "chaturbate", "onlyfans", "bangbros", "adultdvd",
+        "eporner", "beeg.com", "hqporner", "tnaflix", "tube8", "spankwire",
+        "daftsex", "vporn", "leakgirls", "stripchat", "camsoda", "bongacams",
+        "livejasmin", "myfreecams", "fapello", "thothub", "coomer.party",
+        "kemono.party", "erome.com", "heavy-r", "motherless", "txxx",
+        "porn", "xxx", "nsfw"
     )
 
-    // Intrusive Ad Networks, Popups and Malicious Trackers
+    // Intrusive Ad Networks, Popups and Malicious Trackers (specific domain names)
     private val defaultAdNetworks = listOf(
-        "doubleclick.net", "googleadservices", "pagead2.googlesyndication",
-        "popads.net", "propellerads", "adsterra", "exoclick", "trafficjunky",
+        "doubleclick.net", "googleadservices.com", "pagead2.googlesyndication.com",
+        "popads.net", "propellerads.com", "adsterra.com", "exoclick.com", "trafficjunky.com",
         "outbrain.com", "taboola.com", "mgid.com", "adnxs.com", "criteo.com",
-        "adroll.com", "clickadu", "richpush", "onclickads", "bet365", "1xbet",
-        "melbet", "mostbet", "adcolony", "applovin", "unityads", "ironsrc"
+        "adroll.com", "clickadu.com", "richpush.co", "onclickads.net",
+        "bet365.com", "1xbet.com", "melbet.com", "mostbet.com"
     )
 
     // Skip Ad button identifiers and texts across apps
     private val skipAdButtonKeywords = listOf(
         "skip_ad", "ad_skip", "skip_button", "skipbutton", "btn_skip",
         "ytp-ad-skip-button", "action_skip", "skip_ad_container",
-        "skip ad", "skip ads", "skip", "বিজ্ঞাপন এড়িয়ে যান", "বিজ্ঞাপন এড়িয়ে যান", "স্কিপ"
+        "skip_ad_button", "ad_skip_button", "skip_button_container",
+        "countdown_text", "skip_ad_text", "sub_action_button",
+        "skip ad", "skip ads", "skip", "skip in", "skip ad in",
+        "বিজ্ঞাপন এড়িয়ে যান", "বিজ্ঞাপন এড়িয়ে যান", "স্কিপ করুন", "স্কিপ", "এড়িয়ে যান"
     )
 
     // Browsers package names to inspect for URL / Web address bars
@@ -96,15 +104,11 @@ class ShortsBlockerService : AccessibilityService() {
         "reel_watch_fragment",
         "reel_player_fragment",
         "shorts_player_fragment",
-        "reel_recycler",
         "shorts_player_view",
         "reel_player_page",
         "shorts_video_surface_view",
         "reel_video_view",
         "reel_watch_container",
-        "shorts_container",
-        "shorts_root",
-        "reel_root",
         "shorts_main_container",
         "shorts_player_surface",
         "reel_player_overlay",
@@ -117,7 +121,6 @@ class ShortsBlockerService : AccessibilityService() {
         "reel_player_remix_button",
         "reel_player_sound_button",
         "shorts_sound_title",
-        "shorts_pivot_button",
         "shorts_camera_button",
         "shorts_remix_button",
         "reel_item_player",
@@ -334,11 +337,11 @@ class ShortsBlockerService : AccessibilityService() {
         if (!isMasterEnabled) return null
 
         return when {
-            pkg.contains("youtube") && (prefs.getBoolean(PREF_BLOCK_YOUTUBE, true) || prefs.getInt("app_limit_youtube", 0) > 0 || prefs.getInt("shorts_limit_youtube", 0) >= 0) -> {
+            pkg.contains("youtube") && (prefs.getBoolean(PREF_BLOCK_YOUTUBE, true) || prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true) || prefs.getInt("app_limit_youtube", 0) > 0 || prefs.getInt("shorts_limit_youtube", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "youtube", appLabel = "YouTube", packageName = pkg, isCustomApp = false)
             }
             (pkg.contains("facebook.katana") || pkg.contains("facebook.lite")) &&
-                    (prefs.getBoolean(PREF_BLOCK_FACEBOOK, true) || prefs.getInt("app_limit_facebook", 0) > 0 || prefs.getInt("shorts_limit_facebook", 0) >= 0) -> {
+                    (prefs.getBoolean(PREF_BLOCK_FACEBOOK, true) || prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true) || prefs.getInt("app_limit_facebook", 0) > 0 || prefs.getInt("shorts_limit_facebook", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "facebook", appLabel = "Facebook", packageName = pkg, isCustomApp = false)
             }
             pkg.contains("instagram") && (prefs.getBoolean(PREF_BLOCK_INSTAGRAM, true) || prefs.getInt("app_limit_instagram", 0) > 0 || prefs.getInt("shorts_limit_instagram", 0) >= 0) -> {
@@ -437,7 +440,18 @@ class ShortsBlockerService : AccessibilityService() {
             return 2500L
         }
 
-        // 3. If it's YouTube / Facebook / Instagram, track Shorts / Reels time
+        // 3. Try auto-skipping video ads periodically (every second) when YouTube or Facebook is open
+        if (appKey == "youtube" || appKey == "facebook") {
+            val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
+            if (autoSkip) {
+                val root = try { rootInActiveWindow } catch (_: Exception) { null }
+                if (root != null) {
+                    tryAutoSkipAds(root, currentPkg)
+                }
+            }
+        }
+
+        // 4. If it's YouTube / Facebook / Instagram, track Shorts / Reels time
         // Only inspect if Shorts limit is not set to unlimited (-1)
         val shortsPrefLimitKey = "shorts_limit_$appKey"
         val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0) // -1: Unlimited, 0: Block (Off), >0: Mins
@@ -458,27 +472,7 @@ class ShortsBlockerService : AccessibilityService() {
 
                     if (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L)) {
                         flushPendingUsageToPrefs()
-                        performGlobalAction(GLOBAL_ACTION_BACK)
-                        if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
-                            lastBackActionTimestamp = now
-                            val shortLabel = when (appKey) {
-                                "youtube" -> "YouTube Shorts"
-                                "facebook" -> "Facebook Reels"
-                                "instagram" -> "Instagram Reels"
-                                else -> appLabel
-                            }
-                            showShortsLimitToast(shortLabel, shortsLimitMinutes)
-                            recordBlockEvent(shortLabel, currentPkg)
-                        }
-                        // Fail-safe: if still on Shorts after pressing BACK, kick to Home
-                        mainHandler.postDelayed({
-                            try {
-                                val currentRoot = rootInActiveWindow
-                                if (currentRoot != null && isYouTubeShortsPlayerActive(currentRoot)) {
-                                    performGlobalAction(GLOBAL_ACTION_HOME)
-                                }
-                            } catch (_: Exception) {}
-                        }, 250L)
+                        handleShortsBlockAction(appKey, currentPkg, root)
                     }
                 }
             }
@@ -545,12 +539,12 @@ class ShortsBlockerService : AccessibilityService() {
             return
         }
 
-        // 2. Try auto-skipping video ads if enabled (ONLY for YouTube and Facebook, throttled to 2 seconds)
+        // 2. Try auto-skipping video ads if enabled (for YouTube and Facebook, throttled to 500ms)
         if (trackedApp != null && (packageName.contains("youtube") || packageName.contains("facebook"))) {
             val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
             if (autoSkip) {
                 val now = SystemClock.elapsedRealtime()
-                if (now - lastAdSkipCheckTime >= 2000L) {
+                if (now - lastAdSkipCheckTime >= 500L) {
                     lastAdSkipCheckTime = now
                     val root: AccessibilityNodeInfo? = event.source ?: try { rootInActiveWindow } catch (_: Exception) { null }
                     if (root != null) {
@@ -609,28 +603,7 @@ class ShortsBlockerService : AccessibilityService() {
                     // -1 = Unlimited (no block), 0 = Block, > 0 = time limit
                     if (shortsLimitMinutes == 0 || todayShortsUsedSeconds >= (shortsLimitMinutes * 60L)) {
                         flushPendingUsageToPrefs()
-                        performGlobalAction(GLOBAL_ACTION_BACK)
-                        if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
-                            lastBackActionTimestamp = now
-                            val shortLabel = when (appKey) {
-                                "youtube" -> "YouTube Shorts"
-                                "facebook" -> "Facebook Reels"
-                                "instagram" -> "Instagram Reels"
-                                else -> appLabel
-                            }
-                            showShortsLimitToast(shortLabel, shortsLimitMinutes)
-                            recordBlockEvent(shortLabel, packageName)
-                        }
-
-                        // Fail-safe: if still on Shorts after pressing BACK, kick to Home
-                        mainHandler.postDelayed({
-                            try {
-                                val currentRoot = rootInActiveWindow
-                                if (currentRoot != null && isYouTubeShortsPlayerActive(currentRoot)) {
-                                    performGlobalAction(GLOBAL_ACTION_HOME)
-                                }
-                            } catch (_: Exception) {}
-                        }, 250L)
+                        handleShortsBlockAction(appKey, packageName, root)
                     }
                 }
             }
@@ -682,19 +655,61 @@ class ShortsBlockerService : AccessibilityService() {
         }
     }
 
-    private fun tryAutoSkipAds(root: AccessibilityNodeInfo, packageName: String) {
+    private fun tryAutoSkipAds(root: AccessibilityNodeInfo, packageName: String): Boolean {
         val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
-        if (!autoSkip) return
+        if (!autoSkip) return false
 
-        val skipButton = findClickableNodeMatchingKeywords(root, skipAdButtonKeywords) ?: return
-        val clicked = skipButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        if (clicked) {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastToastTimestamp >= 3000L) {
-                lastToastTimestamp = now
-                recordAdBlockEvent("Video Ad Skipped", packageName)
+        val skipButton = findClickableNodeMatchingKeywords(root, skipAdButtonKeywords) ?: return false
+
+        // Attempt 1: Standard ACTION_CLICK on the node or its clickable ancestors
+        var clicked = clickNodeOrParent(skipButton)
+
+        // Attempt 2: If standard click fails or node isn't reporting clickable, perform a dispatchGesture click at center coordinates
+        if (!clicked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val rect = android.graphics.Rect()
+            skipButton.getBoundsInScreen(rect)
+            if (rect.width() > 0 && rect.height() > 0) {
+                val clickPath = android.graphics.Path().apply {
+                    moveTo(rect.centerX().toFloat(), rect.centerY().toFloat())
+                }
+                val stroke = GestureDescription.StrokeDescription(clickPath, 0L, 50L)
+                val gesture = GestureDescription.Builder().addStroke(stroke).build()
+                clicked = dispatchGesture(gesture, null, null)
             }
         }
+
+        if (clicked) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastAdSkipRecordTime >= 2000L) {
+                lastAdSkipRecordTime = now
+                recordAdBlockEvent("Video Ad Skipped", packageName)
+            }
+            return true
+        }
+        return false
+    }
+
+    private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {
+        if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            return true
+        }
+        var p = node.parent
+        var depth = 0
+        while (p != null && depth < 4) {
+            if (p.isClickable && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
+            p = p.parent
+            depth++
+        }
+        // Also check if any immediate child is clickable (e.g. wrapper layout around a button)
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (child.isClickable && child.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun findClickableNodeMatchingKeywords(
@@ -702,20 +717,21 @@ class ShortsBlockerService : AccessibilityService() {
         keywords: List<String>,
         depth: Int = 0
     ): AccessibilityNodeInfo? {
-        if (depth > 14) return null
+        if (depth > 20) return null
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
-        val text = node.text?.toString()?.lowercase() ?: ""
-        val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+        val text = node.text?.toString()?.lowercase()?.trim() ?: ""
+        val desc = node.contentDescription?.toString()?.lowercase()?.trim() ?: ""
 
-        val matches = keywords.any {
-            viewId.contains(it) || (text.isNotBlank() && text.contains(it)) || (desc.isNotBlank() && desc.contains(it))
+        val matches = keywords.any { kw ->
+            viewId.contains(kw) ||
+            (text.isNotEmpty() && (text == kw || text.contains(kw) || kw.contains(text))) ||
+            (desc.isNotEmpty() && (desc == kw || desc.contains(kw) || kw.contains(desc)))
         }
 
         if (matches) {
-            if (node.isClickable) return node
-            val parent = node.parent
-            if (parent != null && parent.isClickable) return parent
+            // Return this node as candidate (clickNodeOrParent will resolve clickability)
+            return node
         }
 
         for (i in 0 until node.childCount) {
@@ -859,6 +875,136 @@ class ShortsBlockerService : AccessibilityService() {
         return hasMatchingPlayerNode(root, instagramReelsPlayerIndicators)
     }
 
+    private fun handleShortsBlockAction(appKey: String, packageName: String, root: AccessibilityNodeInfo?) {
+        val now = SystemClock.elapsedRealtime()
+        val limitMinutes = prefs.getInt("shorts_limit_$appKey", 0)
+        val shortLabel = when (appKey) {
+            "youtube" -> "YouTube Shorts"
+            "facebook" -> "Facebook Reels"
+            "instagram" -> "Instagram Reels"
+            else -> appKey.replaceFirstChar { it.uppercase() }
+        }
+
+        if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
+            lastBackActionTimestamp = now
+            showShortsLimitToast(shortLabel, limitMinutes)
+            recordBlockEvent(shortLabel, packageName)
+        }
+
+        if (appKey == "youtube") {
+            // For YouTube: Exit Shorts video and return directly to YouTube Home page.
+            // Under NO circumstance do we call GLOBAL_ACTION_HOME (which would close the YouTube app).
+
+            // 1. Try to directly click the YouTube Home tab if visible
+            val homeClicked = tryClickYouTubeHomeTab(root)
+            if (!homeClicked) {
+                // If player is full-screen, press Back to exit the Shorts video player
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+
+            // 2. Follow-up check: Ensure we stay inside YouTube and are safely on the Home feed
+            mainHandler.postDelayed({
+                try {
+                    val currentRoot = rootInActiveWindow ?: return@postDelayed
+                    val currentPkg = currentRoot.packageName?.toString() ?: ""
+                    if (currentPkg.contains("youtube")) {
+                        if (isYouTubeShortsPlayerActive(currentRoot)) {
+                            // If still showing Shorts (e.g. user selected bottom Shorts tab or opened direct URL),
+                            // click Home tab or bring YouTube's main launcher activity (Home) to front
+                            if (!tryClickYouTubeHomeTab(currentRoot)) {
+                                launchAppHomeActivity("com.google.android.youtube")
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }, 300L)
+        } else {
+            // For Facebook / Instagram: Press Back to return to normal feed
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            mainHandler.postDelayed({
+                try {
+                    val currentRoot = rootInActiveWindow ?: return@postDelayed
+                    val currentPkg = currentRoot.packageName?.toString() ?: ""
+                    if (currentPkg.contains(appKey)) {
+                        val stillOnReels = when (appKey) {
+                            "facebook" -> isFacebookReelsPlayerActive(currentRoot)
+                            "instagram" -> isInstagramReelsPlayerActive(currentRoot)
+                            else -> false
+                        }
+                        if (stillOnReels) {
+                            launchAppHomeActivity(packageName)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }, 300L)
+        }
+    }
+
+    private fun tryClickYouTubeHomeTab(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        return findAndClickHomeNode(root, depth = 0)
+    }
+
+    private fun findAndClickHomeNode(node: AccessibilityNodeInfo, depth: Int): Boolean {
+        if (depth > 28) return false
+
+        val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+        val text = node.text?.toString()?.lowercase() ?: ""
+        val viewId = node.viewIdResourceName?.lowercase() ?: ""
+
+        // Check if this node represents the YouTube Home tab
+        val isHomeCandidate = (desc == "home" || desc.startsWith("home,") || desc == "হোম" || desc.contains("হোম") ||
+                text == "home" || text == "হোম" || viewId.endsWith("tab_home")) &&
+                !desc.contains("home screen") && !desc.contains("হোম স্ক্রীন")
+
+        if (isHomeCandidate) {
+            if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
+            val parent = node.parent
+            if (parent != null && parent.isClickable && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
+        }
+
+        // Check YouTube bottom navigation bar (pivot bar): tab 0 is always Home
+        if (viewId.contains("pivot_bar") && node.childCount > 0) {
+            val firstTab = node.getChild(0)
+            if (firstTab != null) {
+                if (firstTab.isClickable && firstTab.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    return true
+                }
+                for (j in 0 until firstTab.childCount) {
+                    val sub = firstTab.getChild(j) ?: continue
+                    if (sub.isClickable && sub.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        return true
+                    }
+                }
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (findAndClickHomeNode(child, depth + 1)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun launchAppHomeActivity(packageName: String) {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                action = Intent.ACTION_MAIN
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            if (intent != null) {
+                startActivity(intent)
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun hasMatchingPlayerNode(
         node: AccessibilityNodeInfo,
         playerIndicators: List<String>,
@@ -881,8 +1027,8 @@ class ShortsBlockerService : AccessibilityService() {
         }
 
         // Detect if Shorts navigation tab is selected in YouTube
-        if ((contentDesc == "shorts" || text == "shorts" || contentDesc.contains("শর্টস") || text.contains("শর্টস")) &&
-            (node.isSelected || className.contains("tab", ignoreCase = true) && !node.isClickable)) {
+        val isShortsTab = (contentDesc == "shorts" || text == "shorts" || contentDesc.contains("শর্টস") || text.contains("শর্টস") || viewId.contains("shorts_pivot"))
+        if (isShortsTab && (node.isSelected || className.contains("tab", ignoreCase = true) && !node.isClickable)) {
             return true
         }
 
