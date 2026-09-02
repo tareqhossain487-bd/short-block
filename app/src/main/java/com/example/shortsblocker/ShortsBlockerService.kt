@@ -163,25 +163,43 @@ class ShortsBlockerService : AccessibilityService() {
         super.onCreate()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         checkAndResetDailyUsage()
-        mainHandler.removeCallbacks(tickerRunnable)
-        mainHandler.post(tickerRunnable)
+        ensureTickerRunning()
+    }
+
+    override fun onStartCommand(intent: android.content.Intent?, flags: Int, startId: Int): Int {
+        if (!::prefs.isInitialized) {
+            prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        }
+        checkAndResetDailyUsage()
+        ensureTickerRunning()
+        return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: android.content.Intent?) {
+        super.onTaskRemoved(rootIntent)
+        ensureTickerRunning()
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         checkAndResetDailyUsage()
-        mainHandler.removeCallbacks(tickerRunnable)
-        mainHandler.post(tickerRunnable)
+        ensureTickerRunning()
     }
 
     override fun onInterrupt() {
-        mainHandler.removeCallbacks(tickerRunnable)
+        // Keep running ticker even if accessibility is temporarily interrupted
+        ensureTickerRunning()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        ensureTickerRunning()
+    }
+
+    private fun ensureTickerRunning() {
         mainHandler.removeCallbacks(tickerRunnable)
+        mainHandler.post(tickerRunnable)
     }
 
     private fun getTrackedAppInfo(pkg: String): TrackedAppInfo? {
@@ -274,14 +292,13 @@ class ShortsBlockerService : AccessibilityService() {
 
         // 2. Check if App Limit is exceeded
         if (appLimitMinutes > 0 && currentAppUsed >= (appLimitMinutes * 60L)) {
-            if (now - lastHomeActionTimestamp >= 1000L) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            activeForegroundPackage = ""
+            if (now - lastHomeActionTimestamp >= 2000L) {
                 lastHomeActionTimestamp = now
                 showAppLimitToast(appLabel, appLimitMinutes)
                 recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", currentPkg)
-                activeForegroundPackage = ""
-                // Kick out of app to Home screen immediately
-                performGlobalAction(GLOBAL_ACTION_HOME)
-                performGlobalAction(GLOBAL_ACTION_BACK)
             }
             return
         }
@@ -304,9 +321,10 @@ class ShortsBlockerService : AccessibilityService() {
                 prefs.edit().putLong(shortsPrefUsedKey, currentShortsUsed).apply()
 
                 // If shortsLimitMinutes == -1 (Unlimited), do NOT block.
-                // If shortsLimitMinutes == 0 (Block), block immediately without annoying toast.
+                // If shortsLimitMinutes == 0 (Block), block immediately.
                 // If shortsLimitMinutes > 0, block when used >= limit.
                 if (shortsLimitMinutes != -1 && (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L))) {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
                     if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
                         lastBackActionTimestamp = now
                         val shortLabel = when (appKey) {
@@ -315,12 +333,18 @@ class ShortsBlockerService : AccessibilityService() {
                             "instagram" -> "Instagram Reels"
                             else -> appLabel
                         }
-                        if (shortsLimitMinutes > 0) {
-                            showShortsLimitToast(shortLabel, shortsLimitMinutes)
-                        }
+                        showShortsLimitToast(shortLabel, shortsLimitMinutes)
                         recordBlockEvent(shortLabel, currentPkg)
-                        performGlobalAction(GLOBAL_ACTION_BACK)
                     }
+                    // Fail-safe: if still on Shorts after pressing BACK, kick to Home
+                    mainHandler.postDelayed({
+                        try {
+                            val currentRoot = rootInActiveWindow
+                            if (currentRoot != null && isYouTubeShortsPlayerActive(currentRoot)) {
+                                performGlobalAction(GLOBAL_ACTION_HOME)
+                            }
+                        } catch (_: Exception) {}
+                    }, 250L)
                 }
             }
         }
@@ -344,6 +368,7 @@ class ShortsBlockerService : AccessibilityService() {
         val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
         if (!isMasterEnabled) return
 
+        ensureTickerRunning()
         checkAndResetDailyUsage()
 
         val packageName = event.packageName?.toString() ?: return
@@ -379,13 +404,13 @@ class ShortsBlockerService : AccessibilityService() {
         val appLimitMinutes = prefs.getInt("app_limit_$appKey", 0)
         val todayAppUsedSeconds = prefs.getLong("app_used_sec_$appKey", 0L)
         if (appLimitMinutes > 0 && todayAppUsedSeconds >= (appLimitMinutes * 60L)) {
-            if (now - lastHomeActionTimestamp >= 800L) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            activeForegroundPackage = ""
+            if (now - lastHomeActionTimestamp >= 2000L) {
                 lastHomeActionTimestamp = now
                 showAppLimitToast(appLabel, appLimitMinutes)
                 recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", packageName)
-                activeForegroundPackage = ""
-                performGlobalAction(GLOBAL_ACTION_HOME)
-                performGlobalAction(GLOBAL_ACTION_BACK)
             }
             return
         }
@@ -409,6 +434,7 @@ class ShortsBlockerService : AccessibilityService() {
 
             // -1 = Unlimited (no block), 0 = Block, > 0 = time limit
             if (shortsLimitMinutes != -1 && (shortsLimitMinutes == 0 || todayShortsUsedSeconds >= (shortsLimitMinutes * 60L))) {
+                performGlobalAction(GLOBAL_ACTION_BACK)
                 if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
                     lastBackActionTimestamp = now
                     val shortLabel = when (appKey) {
@@ -417,12 +443,19 @@ class ShortsBlockerService : AccessibilityService() {
                         "instagram" -> "Instagram Reels"
                         else -> appLabel
                     }
-                    if (shortsLimitMinutes > 0) {
-                        showShortsLimitToast(shortLabel, shortsLimitMinutes)
-                    }
+                    showShortsLimitToast(shortLabel, shortsLimitMinutes)
                     recordBlockEvent(shortLabel, packageName)
-                    performGlobalAction(GLOBAL_ACTION_BACK)
                 }
+
+                // Fail-safe: if still on Shorts after pressing BACK, kick to Home
+                mainHandler.postDelayed({
+                    try {
+                        val currentRoot = rootInActiveWindow
+                        if (currentRoot != null && isYouTubeShortsPlayerActive(currentRoot)) {
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                        }
+                    } catch (_: Exception) {}
+                }, 250L)
             }
         }
     }
@@ -562,7 +595,7 @@ class ShortsBlockerService : AccessibilityService() {
         Handler(Looper.getMainLooper()).post {
             Toast.makeText(
                 applicationContext,
-                "⏳ $appName এর আজকের সময়সীমা ($limitMinutes মিনিট) শেষ হয়েছে! অ্যাপ বন্ধ করা হয়েছে।",
+                "⏳ $appName এর দৈনিক লিমিট ($limitMinutes মিনিট) শেষ! রাত ১২:০০ টার আগে আর খোলা যাবে না (অথবা Blocker অ্যাপে রিসেট করুন)।",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -573,19 +606,30 @@ class ShortsBlockerService : AccessibilityService() {
         if (now - lastToastTimestamp < 2500L) return
         lastToastTimestamp = now
 
+        val msg = if (limitMinutes == 0) {
+            "🚫 $shortLabel সম্পূর্ণ ব্লক করা রয়েছে!"
+        } else {
+            "⏳ $shortLabel এর দৈনিক সময়সীমা ($limitMinutes মিনিট) শেষ! রাত ১২:০০ টার পর আবার দেখা যাবে।"
+        }
         Handler(Looper.getMainLooper()).post {
             Toast.makeText(
                 applicationContext,
-                "⏳ $shortLabel এর দৈনিক সময়সীমা ($limitMinutes মিনিট) শেষ হয়েছে!",
+                msg,
                 Toast.LENGTH_SHORT
             ).show()
         }
     }
 
     private fun checkAndResetDailyUsage() {
-        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val savedDate = prefs.getString(PREF_TODAY_DATE, "") ?: ""
+        if (savedDate.isBlank()) {
+            // First run on device - initialize today's date without resetting existing counters
+            prefs.edit().putString(PREF_TODAY_DATE, todayStr).apply()
+            return
+        }
         if (savedDate != todayStr) {
+            // Midnight (12:00 AM) has passed! New calendar day reset
             val editor = prefs.edit().putString(PREF_TODAY_DATE, todayStr)
             // Reset built-in apps usage
             val apps = listOf("youtube", "facebook", "instagram")
@@ -644,6 +688,12 @@ class ShortsBlockerService : AccessibilityService() {
         }
 
         if (textKeywords.isNotEmpty() && textKeywords.any { contentDesc.contains(it) || text.contains(it) }) {
+            return true
+        }
+
+        // Detect if Shorts navigation tab is selected in YouTube
+        if ((contentDesc == "shorts" || text == "shorts" || contentDesc.contains("শর্টস") || text.contains("শর্টস")) &&
+            (node.isSelected || className.contains("tab", ignoreCase = true) && !node.isClickable)) {
             return true
         }
 

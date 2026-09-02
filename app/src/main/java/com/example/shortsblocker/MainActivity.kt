@@ -41,6 +41,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
+        try {
+            startService(Intent(this, ShortsBlockerService::class.java))
+        } catch (_: Exception) {}
+
         setContent {
             ShortsBlockerTheme {
                 val uiState by viewModel.uiState.collectAsState()

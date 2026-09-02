@@ -327,6 +327,32 @@ fun AppAndShortsDailyLimitCard(
                             tagPrefix = "${selectedAppKey}_shorts"
                         )
                     }
+
+                    // Persistent Limit & Midnight Reset Rule Banner
+                    Surface(
+                        color = IndigoPrimary.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, IndigoPrimary.copy(alpha = 0.2f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Timer,
+                                contentDescription = null,
+                                tint = IndigoPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "🔒 দৈনিক সীমা শেষ হলে রাত ১২:০০ টার আগে আর খোলা যাবে না (রিসেট বাটন ছাড়া)। রিসেন্ট অ্যাপস থেকে ক্লিয়ার করলেও ব্লকার সক্রিয় থাকবে।",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
                 }
             }
 

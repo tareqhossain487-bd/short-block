@@ -88,6 +88,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private fun loadStateFromPreferences() {
+        checkAndResetDailyUsage()
         val masterEnabled = prefs.getBoolean(ShortsBlockerService.PREF_ENABLED, true)
         val blockYt = prefs.getBoolean(ShortsBlockerService.PREF_BLOCK_YOUTUBE, true)
         val blockFb = prefs.getBoolean(ShortsBlockerService.PREF_BLOCK_FACEBOOK, true)
@@ -543,6 +544,7 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private fun syncStatistics() {
+        checkAndResetDailyUsage()
         val total = prefs.getInt(ShortsBlockerService.PREF_TOTAL_BLOCKED, 0)
         val ytCount = prefs.getInt(ShortsBlockerService.PREF_YOUTUBE_BLOCKED, 0)
         val fbCount = prefs.getInt(ShortsBlockerService.PREF_FACEBOOK_BLOCKED, 0)
@@ -608,6 +610,31 @@ class ShortsBlockerViewModel(application: Application) : AndroidViewModel(applic
                 customApps = customApps,
                 recentEvents = events
             )
+        }
+    }
+
+    private fun checkAndResetDailyUsage() {
+        val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val savedDate = prefs.getString(ShortsBlockerService.PREF_TODAY_DATE, "") ?: ""
+        if (savedDate.isBlank()) {
+            prefs.edit().putString(ShortsBlockerService.PREF_TODAY_DATE, todayStr).apply()
+            return
+        }
+        if (savedDate != todayStr) {
+            val editor = prefs.edit().putString(ShortsBlockerService.PREF_TODAY_DATE, todayStr)
+            val apps = listOf("youtube", "facebook", "instagram")
+            apps.forEach { appKey ->
+                editor.putLong("app_used_sec_$appKey", 0L)
+                editor.putLong("shorts_used_sec_$appKey", 0L)
+            }
+            val customAppsStr = prefs.getString(ShortsBlockerService.PREF_CUSTOM_APPS, "") ?: ""
+            customAppsStr.split(";").filter { it.isNotBlank() }.forEach {
+                val parts = it.split("#")
+                if (parts.size >= 2) {
+                    editor.putLong("app_used_sec_${parts[1]}", 0L)
+                }
+            }
+            editor.apply()
         }
     }
 
