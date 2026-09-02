@@ -53,24 +53,21 @@ class ShortsBlockerService : AccessibilityService() {
     @Volatile
     private var lastPackageEventTime: Long = 0L
 
-    // Specific adult domains and explicit porn keywords (avoiding substrings that collide with normal words)
-    private val adultDomainsAndKeywords = listOf(
-        "pornhub", "xvideos", "xnxx", "xhamster", "redtube", "youporn",
-        "brazzers", "chaturbate", "onlyfans", "bangbros", "adultdvd",
-        "eporner", "beeg.com", "hqporner", "tnaflix", "tube8", "spankwire",
-        "daftsex", "vporn", "leakgirls", "stripchat", "camsoda", "bongacams",
-        "livejasmin", "myfreecams", "fapello", "thothub", "coomer.party",
-        "kemono.party", "erome.com", "heavy-r", "motherless", "txxx",
-        "porn", "xxx", "nsfw"
+    // Adult keywords and popular porn domain substrings
+    private val adultKeywords = listOf(
+        "porn", "xxx", "xvideos", "pornhub", "xnxx", "xhamster", "redtube",
+        "youporn", "brazzers", "sex", "nude", "erotic", "nsfw", "cam4",
+        "chaturbate", "onlyfans", "bangbros", "adultdvd", "eporner", "beeg",
+        "hqporner", "tnaflix", "tube8", "spankwire", "daftsex", "vporn", "leakgirls"
     )
 
-    // Intrusive Ad Networks, Popups and Malicious Trackers (specific domain names)
+    // Intrusive Ad Networks, Popups and Malicious Trackers
     private val defaultAdNetworks = listOf(
-        "doubleclick.net", "googleadservices.com", "pagead2.googlesyndication.com",
-        "popads.net", "propellerads.com", "adsterra.com", "exoclick.com", "trafficjunky.com",
+        "doubleclick.net", "googleadservices", "pagead2.googlesyndication",
+        "popads.net", "propellerads", "adsterra", "exoclick", "trafficjunky",
         "outbrain.com", "taboola.com", "mgid.com", "adnxs.com", "criteo.com",
-        "adroll.com", "clickadu.com", "richpush.co", "onclickads.net",
-        "bet365.com", "1xbet.com", "melbet.com", "mostbet.com"
+        "adroll.com", "clickadu", "richpush", "onclickads", "bet365", "1xbet",
+        "melbet", "mostbet", "adcolony", "applovin", "unityads", "ironsrc"
     )
 
     // Skip Ad button identifiers and texts across apps
