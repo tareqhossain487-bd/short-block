@@ -130,14 +130,42 @@ class ShortsBlockerService : AccessibilityService() {
         "melbet", "mostbet", "adcolony", "applovin", "unityads", "ironsrc"
     )
 
-    // Skip Ad button identifiers and texts across apps
-    private val skipAdButtonKeywords = listOf(
-        "skip_ad", "ad_skip", "skip_button", "skipbutton", "btn_skip",
-        "ytp-ad-skip-button", "action_skip", "skip_ad_container",
-        "skip_ad_button", "ad_skip_button", "skip_button_container",
-        "countdown_text", "skip_ad_text", "sub_action_button",
-        "skip ad", "skip ads", "skip", "skip in", "skip ad in",
-        "বিজ্ঞাপন এড়িয়ে যান", "বিজ্ঞাপন এড়িয়ে যান", "স্কিপ করুন", "স্কিপ", "এড়িয়ে যান"
+    // YouTube Ad Skip button resource IDs (strictly ad-skipping buttons)
+    private val skipAdButtonResourceIds = listOf(
+        "skip_ad_button",
+        "modern_skip_ad_button",
+        "ad_skip_button",
+        "ytp-ad-skip-button",
+        "skip_ad_button_text"
+    )
+
+    // Specific phrases for ad skip buttons
+    private val skipAdButtonPhrases = listOf(
+        "skip ad",
+        "skip ads",
+        "skip advertisement",
+        "বিজ্ঞাপন এড়িয়ে যান",
+        "বিজ্ঞাপন এড়িয়ে যান",
+        "স্কিপ করুন",
+        "স্কিপ বিজ্ঞাপন"
+    )
+
+    // View IDs that must NEVER be clicked by ad skipper (prevents opening description, shopping picks, etc.)
+    private val ignoredAdSkipIds = listOf(
+        "sub_action_button",
+        "engagement_panel",
+        "product",
+        "shopping",
+        "description",
+        "panel",
+        "channel",
+        "subscribe",
+        "like",
+        "dislike",
+        "share",
+        "download",
+        "remix",
+        "comment"
     )
 
     // Browsers package names to inspect for URL / Web address bars
@@ -810,7 +838,7 @@ class ShortsBlockerService : AccessibilityService() {
     private fun tryAutoSkipAds(root: AccessibilityNodeInfo, packageName: String): Boolean {
         if (!cachedAutoSkipAds) return false
 
-        val skipButton = findClickableNodeMatchingKeywords(root, skipAdButtonKeywords) ?: return false
+        val skipButton = findAdSkipButton(root) ?: return false
         var clicked = false
         try {
             // Attempt 1: Standard ACTION_CLICK on the node or its clickable ancestors
@@ -852,7 +880,12 @@ class ShortsBlockerService : AccessibilityService() {
         }
         var p = node.parent
         var depth = 0
-        while (p != null && depth < 4) {
+        while (p != null && depth < 3) {
+            val pId = p.viewIdResourceName?.lowercase() ?: ""
+            if (ignoredAdSkipIds.any { pId.contains(it) }) {
+                try { p.recycle() } catch (_: Exception) {}
+                break
+            }
             val isClickable = p.isClickable
             val success = if (isClickable) p.performAction(AccessibilityNodeInfo.ACTION_CLICK) else false
             val nextP = p.parent
@@ -864,47 +897,62 @@ class ShortsBlockerService : AccessibilityService() {
             p = nextP
             depth++
         }
-        // Also check if any immediate child is clickable (e.g. wrapper layout around a button)
-        val childCount = node.childCount
-        for (i in 0 until childCount) {
-            val child = node.getChild(i) ?: continue
-            val isClickable = child.isClickable
-            val success = if (isClickable) child.performAction(AccessibilityNodeInfo.ACTION_CLICK) else false
-            try { child.recycle() } catch (_: Exception) {}
-            if (success) {
-                return true
-            }
-        }
         return false
     }
 
-    private fun findClickableNodeMatchingKeywords(
+    private fun isAdSkipNode(node: AccessibilityNodeInfo): Boolean {
+        val viewId = node.viewIdResourceName?.lowercase() ?: ""
+
+        // Strict guard: Never match shopping, product picks, engagement panels, description expanders, or media actions
+        if (ignoredAdSkipIds.any { viewId.contains(it) }) {
+            return false
+        }
+
+        val text = node.text?.toString()?.lowercase()?.trim() ?: ""
+        val desc = node.contentDescription?.toString()?.lowercase()?.trim() ?: ""
+
+        // Guard against matching video descriptions or media controls
+        val combined = "$viewId $text $desc"
+        if (combined.contains("product") || combined.contains("shopping") || combined.contains("description")) {
+            return false
+        }
+
+        // 1. Direct view ID match for official YouTube skip ad buttons
+        if (skipAdButtonResourceIds.any { viewId.contains(it) }) {
+            return true
+        }
+
+        // 2. Specific ad skip phrases (e.g. "skip ad", "skip ads", "বিজ্ঞাপন এড়িয়ে যান")
+        if (skipAdButtonPhrases.any { phrase -> text.contains(phrase) || desc.contains(phrase) }) {
+            return true
+        }
+
+        // 3. Exact "skip" / "স্কিপ" word match, but ONLY if not next/forward/chapter/intro
+        if (text == "skip" || desc == "skip" || text == "স্কিপ" || desc == "স্কিপ") {
+            if (!combined.contains("next") && !combined.contains("forward") && !combined.contains("chapter") && !combined.contains("intro")) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private fun findAdSkipButton(
         node: AccessibilityNodeInfo,
-        keywords: List<String>,
         depth: Int = 0,
         visitedCount: IntArray = IntArray(1)
     ): AccessibilityNodeInfo? {
         if (depth > 10 || visitedCount[0] > 80) return null
         visitedCount[0]++
 
-        val viewId = node.viewIdResourceName?.lowercase() ?: ""
-        val text = node.text?.toString()?.lowercase()?.trim() ?: ""
-        val desc = node.contentDescription?.toString()?.lowercase()?.trim() ?: ""
-
-        val matches = keywords.any { kw ->
-            viewId.contains(kw) ||
-            (text.isNotEmpty() && (text == kw || text.contains(kw) || kw.contains(text))) ||
-            (desc.isNotEmpty() && (desc == kw || desc.contains(kw) || kw.contains(desc)))
-        }
-
-        if (matches) {
+        if (isAdSkipNode(node)) {
             return node
         }
 
         val childCount = node.childCount
         for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
-            val found = findClickableNodeMatchingKeywords(child, keywords, depth + 1, visitedCount)
+            val found = findAdSkipButton(child, depth + 1, visitedCount)
             if (found != null) return found
             try { child.recycle() } catch (_: Exception) {}
         }
