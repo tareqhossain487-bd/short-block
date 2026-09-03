@@ -59,8 +59,8 @@ fun AppAndShortsDailyLimitCard(
     onToggleShowBlockToast: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // List of selectable apps: built-in (YouTube, Facebook, Instagram) + Custom Apps
-    val builtInKeys = listOf("youtube", "facebook", "instagram")
+    // List of selectable apps: built-in (YouTube) + Custom Apps
+    val builtInKeys = listOf("youtube")
     var selectedAppKey by remember { mutableStateOf("youtube") }
 
     // Fallback if selected custom app was deleted
@@ -75,8 +75,6 @@ fun AppAndShortsDailyLimitCard(
 
     val currentConfig = when (selectedAppKey) {
         "youtube" -> uiState.youtubeLimits
-        "facebook" -> uiState.facebookLimits
-        "instagram" -> uiState.instagramLimits
         else -> AppLimitConfig(
             appKey = selectedAppKey,
             displayName = selectedCustomApp?.name ?: "Custom App",
@@ -91,8 +89,6 @@ fun AppAndShortsDailyLimitCard(
 
     val primaryThemeColor = when (selectedAppKey) {
         "youtube" -> RoseError
-        "facebook" -> Color(0xFF1877F2)
-        "instagram" -> Color(0xFFE1306C)
         else -> IndigoPrimary
     }
 
@@ -141,7 +137,7 @@ fun AppAndShortsDailyLimitCard(
                 }
             }
 
-            // Scrollable App Selector Tabs (YouTube, Facebook, Instagram + Any newly added custom apps)
+            // Scrollable App Selector Tabs (YouTube + Any newly added custom apps)
             ScrollableTabRow(
                 selectedTabIndex = allAppKeys.indexOf(selectedAppKey).coerceAtLeast(0),
                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
@@ -157,28 +153,6 @@ fun AppAndShortsDailyLimitCard(
                             text = "YouTube",
                             fontWeight = if (selectedAppKey == "youtube") FontWeight.Bold else FontWeight.Normal,
                             color = if (selectedAppKey == "youtube") RoseError else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                )
-                Tab(
-                    selected = selectedAppKey == "facebook",
-                    onClick = { selectedAppKey = "facebook" },
-                    text = {
-                        Text(
-                            text = "Facebook",
-                            fontWeight = if (selectedAppKey == "facebook") FontWeight.Bold else FontWeight.Normal,
-                            color = if (selectedAppKey == "facebook") Color(0xFF1877F2) else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                )
-                Tab(
-                    selected = selectedAppKey == "instagram",
-                    onClick = { selectedAppKey = "instagram" },
-                    text = {
-                        Text(
-                            text = "Instagram",
-                            fontWeight = if (selectedAppKey == "instagram") FontWeight.Bold else FontWeight.Normal,
-                            color = if (selectedAppKey == "instagram") Color(0xFFE1306C) else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 )
@@ -296,7 +270,7 @@ fun AppAndShortsDailyLimitCard(
                         tagPrefix = "${selectedAppKey}_app"
                     )
 
-                    // 2. Shorts / Reels Limit Section (Only for YouTube, Facebook, Instagram)
+                    // 2. Shorts Limit Section (Only for YouTube)
                     if (!isCustomSelected) {
                         HorizontalDivider(
                             color = primaryThemeColor.copy(alpha = 0.15f),
@@ -304,10 +278,10 @@ fun AppAndShortsDailyLimitCard(
                         )
 
                         AppLimitSubSection(
-                            title = "2. Shorts & Reels Limit",
+                            title = "2. YouTube Shorts Limit",
                             description = when (currentConfig.shortsLimitMinutes) {
-                                -1 -> "Unlimited: শর্টস বা রিলস ইচ্ছেমতো দেখা যাবে, কোনো ব্লকিং হবে না।"
-                                0 -> "Block: শর্টস/রিলস সম্পূর্ণ বন্ধ থাকবে। ওপেন করলেই সাথে সাথে ব্লক হবে।"
+                                -1 -> "Unlimited: শর্টস ইচ্ছেমতো দেখা যাবে, কোনো ব্লকিং হবে না।"
+                                0 -> "Block: শর্টস সম্পূর্ণ বন্ধ থাকবে। ওপেন করলেই সাথে সাথে ব্লক হবে।"
                                 else -> "দৈনিক ${currentConfig.shortsLimitMinutes} মিনিট শর্টস দেখতে পারবেন। সময় শেষ হলে শুধুমাত্র শর্টস ব্লক হবে (বড় ভিডিও চলবে)।"
                             },
                             icon = Icons.Default.PlayArrow,

@@ -501,13 +501,6 @@ class ShortsBlockerService : AccessibilityService() {
             pkg.contains("youtube") && (cachedBlockYoutube || cachedAutoSkipAds || prefs.getInt("app_limit_youtube", 0) > 0 || prefs.getInt("shorts_limit_youtube", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "youtube", appLabel = "YouTube", packageName = pkg, isCustomApp = false)
             }
-            isFacebookPackage(pkg) &&
-                    (cachedBlockFacebook || cachedAutoSkipAds || prefs.getInt("app_limit_facebook", 0) > 0 || prefs.getInt("shorts_limit_facebook", 0) >= 0) -> {
-                TrackedAppInfo(appKey = "facebook", appLabel = "Facebook", packageName = pkg, isCustomApp = false)
-            }
-            pkg.contains("instagram") && (cachedBlockInstagram || prefs.getInt("app_limit_instagram", 0) > 0 || prefs.getInt("shorts_limit_instagram", 0) >= 0) -> {
-                TrackedAppInfo(appKey = "instagram", appLabel = "Instagram", packageName = pkg, isCustomApp = false)
-            }
             else -> {
                 val matchingCustom = cachedCustomApps.firstOrNull { (_, customPkg, isEnabled) ->
                     isEnabled && (pkg.equals(customPkg, ignoreCase = true) || pkg.contains(customPkg, ignoreCase = true))
@@ -587,7 +580,7 @@ class ShortsBlockerService : AccessibilityService() {
         val shortsPrefLimitKey = "shorts_limit_$appKey"
         val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0) // -1: Unlimited, 0: Block (Off), >0: Mins
         val needShortsCheck = !trackedApp.isCustomApp && shortsLimitMinutes != -1
-        val autoSkip = cachedAutoSkipAds && (appKey == "youtube" || appKey == "facebook")
+        val autoSkip = cachedAutoSkipAds && appKey == "youtube"
 
         if (needShortsCheck || autoSkip) {
             val root = try { rootInActiveWindow } catch (_: Exception) { null }
@@ -600,8 +593,6 @@ class ShortsBlockerService : AccessibilityService() {
                     if (needShortsCheck) {
                         val isShortsOpen = when (appKey) {
                             "youtube" -> isYouTubeShortsPlayerActive(root)
-                            "facebook" -> isFacebookReelsPlayerActive(root)
-                            "instagram" -> isInstagramReelsPlayerActive(root)
                             else -> false
                         }
 
@@ -696,8 +687,8 @@ class ShortsBlockerService : AccessibilityService() {
             return
         }
 
-        // 2. Try auto-skipping video ads if enabled (for YouTube and Facebook, throttled to 2000ms)
-        if (trackedApp != null && (packageName.contains("youtube") || packageName.contains("facebook"))) {
+        // 2. Try auto-skipping video ads if enabled (for YouTube, throttled to 2000ms)
+        if (trackedApp != null && packageName.contains("youtube")) {
             if (cachedAutoSkipAds && (now - lastAdSkipCheckTime >= 2000L)) {
                 lastAdSkipCheckTime = now
                 val root: AccessibilityNodeInfo? = try { rootInActiveWindow } catch (_: Exception) { null }
@@ -749,8 +740,6 @@ class ShortsBlockerService : AccessibilityService() {
                 // Fast-path: Check activity class name BEFORE retrieving root or inspecting tree!
                 val isKnownShortsActivity = when {
                     packageName.contains("youtube") && (eventClassName.contains("ReelWatchActivity", ignoreCase = true) || eventClassName.contains("ShortsActivity", ignoreCase = true)) -> true
-                    packageName.contains("instagram") && eventClassName.contains("ClipsViewerActivity", ignoreCase = true) -> true
-                    isFacebookPackage(packageName) && (eventClassName.contains("Reels", ignoreCase = true) || eventClassName.contains("FbShorts", ignoreCase = true) || eventClassName.contains("ReelViewer", ignoreCase = true)) -> true
                     else -> false
                 }
 
@@ -763,8 +752,6 @@ class ShortsBlockerService : AccessibilityService() {
                         if (root != null) {
                             when {
                                 packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root, eventClassName)
-                                isFacebookPackage(packageName) -> isFacebookReelsPlayerActive(root, eventClassName)
-                                packageName.contains("instagram") -> isInstagramReelsPlayerActive(root, eventClassName)
                                 else -> false
                             }
                         } else {
@@ -1024,7 +1011,7 @@ class ShortsBlockerService : AccessibilityService() {
             // Midnight (12:00 AM) has passed! New calendar day reset
             val editor = prefs.edit().putString(PREF_TODAY_DATE, todayStr)
             // Reset built-in apps usage
-            val apps = listOf("youtube", "facebook", "instagram")
+            val apps = listOf("youtube")
             apps.forEach { appKey ->
                 editor.putLong("app_used_sec_$appKey", 0L)
                 editor.putLong("shorts_used_sec_$appKey", 0L)

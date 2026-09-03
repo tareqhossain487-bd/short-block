@@ -92,7 +92,7 @@ fun RecentActivityCard(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No blocked shorts recorded yet.\nOpen YouTube or Facebook to start blocking!",
+                        text = "No blocked shorts recorded yet.\nOpen YouTube to start blocking!",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -122,8 +122,7 @@ private fun ActivityRow(event: BlockEvent) {
 
     val badgeColor = when {
         event.appName.contains("YouTube", ignoreCase = true) -> RoseError
-        event.appName.contains("Facebook", ignoreCase = true) -> IndigoPrimary
-        else -> VioletSecondary
+        else -> IndigoPrimary
     }
 
     Row(

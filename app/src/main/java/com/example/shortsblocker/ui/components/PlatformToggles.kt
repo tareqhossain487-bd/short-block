@@ -8,12 +8,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.PlayCircle
-import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,8 +33,6 @@ import com.example.shortsblocker.ui.theme.VioletSecondary
 fun PlatformToggles(
     uiState: ShortsBlockerUiState,
     onToggleYouTube: (Boolean) -> Unit,
-    onToggleFacebook: (Boolean) -> Unit,
-    onToggleInstagram: (Boolean) -> Unit,
     onAddCustomApp: (String, String) -> Unit,
     onToggleCustomApp: (String, Boolean) -> Unit,
     onRemoveCustomApp: (String) -> Unit,
@@ -97,36 +93,6 @@ fun PlatformToggles(
                 isChecked = uiState.blockYouTube,
                 onCheckedChange = onToggleYouTube,
                 testTag = "toggle_youtube"
-            )
-
-            HorizontalDivider(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                thickness = 1.dp
-            )
-
-            PlatformRow(
-                icon = Icons.Default.Public,
-                iconTint = IndigoPrimary,
-                title = "Facebook Reels",
-                subtitle = "Closes full-screen Reels viewer in Facebook & Lite",
-                isChecked = uiState.blockFacebook,
-                onCheckedChange = onToggleFacebook,
-                testTag = "toggle_facebook"
-            )
-
-            HorizontalDivider(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                thickness = 1.dp
-            )
-
-            PlatformRow(
-                icon = Icons.Default.CameraAlt,
-                iconTint = VioletSecondary,
-                title = "Instagram Reels",
-                subtitle = "Closes full-screen Clips & Reels in Instagram",
-                isChecked = uiState.blockInstagram,
-                onCheckedChange = onToggleInstagram,
-                testTag = "toggle_instagram"
             )
 
             // Custom Apps section

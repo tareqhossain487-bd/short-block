@@ -71,24 +71,18 @@ fun DailyAnalyticsCard(
 
     // Calculate Spent Minutes from recorded app usage seconds
     val ytSpentMinutes = (uiState.youtubeLimits.appTodayUsedSeconds / 60f)
-    val fbSpentMinutes = (uiState.facebookLimits.appTodayUsedSeconds / 60f)
-    val igSpentMinutes = (uiState.instagramLimits.appTodayUsedSeconds / 60f)
     val customSpentMinutes = (uiState.customApps.sumOf { it.todayUsedSeconds } / 60f)
-    val totalSpentMinutes = ytSpentMinutes + fbSpentMinutes + igSpentMinutes + customSpentMinutes
+    val totalSpentMinutes = ytSpentMinutes + customSpentMinutes
 
     // Calculate Saved Minutes:
     // YouTube Shorts blocked: ~2.5 mins avoided per block
     val ytSavedMinutes = (uiState.youtubeBlockedCount * 2.5f)
-    // Facebook Reels blocked: ~2.5 mins avoided per block
-    val fbSavedMinutes = (uiState.facebookBlockedCount * 2.5f)
-    // Instagram Reels blocked: ~2.5 mins avoided per block
-    val igSavedMinutes = (uiState.instagramBlockedCount * 2.5f)
     // Adult & custom websites blocked: ~4.0 mins avoided per block
     val webSavedMinutes = (uiState.websiteBlockedCount * 4.0f)
     // Ads skipped / blocked: ~0.5 mins (30s) avoided per ad
     val adsSavedMinutes = (uiState.adsBlockedCount * 0.5f)
 
-    val totalSavedMinutes = ytSavedMinutes + fbSavedMinutes + igSavedMinutes + webSavedMinutes + adsSavedMinutes
+    val totalSavedMinutes = ytSavedMinutes + webSavedMinutes + adsSavedMinutes
 
     // Focus Efficiency percentage
     val totalActivityTime = totalSpentMinutes + totalSavedMinutes
@@ -99,9 +93,9 @@ fun DailyAnalyticsCard(
     }
 
     val dataPoints = remember(
-        ytSpentMinutes, ytSavedMinutes, fbSpentMinutes, fbSavedMinutes,
-        igSpentMinutes, igSavedMinutes, webSavedMinutes, adsSavedMinutes, customSpentMinutes,
-        uiState.youtubeBlockedCount, uiState.facebookBlockedCount, uiState.instagramBlockedCount,
+        ytSpentMinutes, ytSavedMinutes,
+        webSavedMinutes, adsSavedMinutes, customSpentMinutes,
+        uiState.youtubeBlockedCount,
         uiState.websiteBlockedCount, uiState.adsBlockedCount
     ) {
         listOf(
@@ -111,20 +105,6 @@ fun DailyAnalyticsCard(
                 savedMinutes = ytSavedMinutes,
                 blockCount = uiState.youtubeBlockedCount,
                 color = Color(0xFFEF4444)
-            ),
-            PlatformDataPoint(
-                platformName = "Facebook",
-                spentMinutes = fbSpentMinutes,
-                savedMinutes = fbSavedMinutes,
-                blockCount = uiState.facebookBlockedCount,
-                color = Color(0xFF3B82F6)
-            ),
-            PlatformDataPoint(
-                platformName = "Instagram",
-                spentMinutes = igSpentMinutes,
-                savedMinutes = igSavedMinutes,
-                blockCount = uiState.instagramBlockedCount,
-                color = Color(0xFFEC4899)
             ),
             PlatformDataPoint(
                 platformName = "Websites",

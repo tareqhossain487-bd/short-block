@@ -118,8 +118,8 @@ fun ShortsBlockerApp(
     onOpenAccessibilitySettings: () -> Unit,
     onToggleMaster: (Boolean) -> Unit,
     onToggleYouTube: (Boolean) -> Unit,
-    onToggleFacebook: (Boolean) -> Unit,
-    onToggleInstagram: (Boolean) -> Unit,
+    onToggleFacebook: (Boolean) -> Unit = {},
+    onToggleInstagram: (Boolean) -> Unit = {},
     onAddCustomApp: (String, String) -> Unit,
     onToggleCustomApp: (String, Boolean) -> Unit,
     onRemoveCustomApp: (String) -> Unit,
@@ -235,8 +235,6 @@ fun ShortsBlockerApp(
                     PlatformToggles(
                         uiState = uiState,
                         onToggleYouTube = onToggleYouTube,
-                        onToggleFacebook = onToggleFacebook,
-                        onToggleInstagram = onToggleInstagram,
                         onAddCustomApp = onAddCustomApp,
                         onToggleCustomApp = onToggleCustomApp,
                         onRemoveCustomApp = onRemoveCustomApp

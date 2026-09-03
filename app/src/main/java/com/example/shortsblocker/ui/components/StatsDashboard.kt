@@ -158,19 +158,11 @@ fun StatsDashboard(
             // Platform, Website & Ads breakdown
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 PlatformStatItem(
                     label = "YouTube",
                     count = uiState.youtubeBlockedCount
-                )
-                PlatformStatItem(
-                    label = "Facebook",
-                    count = uiState.facebookBlockedCount
-                )
-                PlatformStatItem(
-                    label = "Instagram",
-                    count = uiState.instagramBlockedCount
                 )
                 PlatformStatItem(
                     label = "Websites",
