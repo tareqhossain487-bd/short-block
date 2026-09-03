@@ -6,8 +6,10 @@ import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.os.Build
 import android.os.Handler
@@ -43,6 +45,7 @@ class ShortsBlockerService : AccessibilityService() {
     private var lastBrowserCheckTimestamp: Long = 0L
     private var lastAdSkipCheckTime: Long = 0L
     private var lastFlushTime: Long = 0L
+    private var lastTickTimestamp: Long = 0L
 
     // In-memory usage buffers to eliminate continuous SharedPreferences disk I/O
     private val bufferedAppSeconds = mutableMapOf<String, Long>()
@@ -137,16 +140,62 @@ class ShortsBlockerService : AccessibilityService() {
     )
 
     private val facebookReelsPlayerIndicators = listOf(
-        "fb_shorts_viewer_fragment",
-        "reels_viewer_fragment",
-        "fb_shorts_full_screen",
-        "reels_video_view_container",
-        "reel_viewer_activity",
-        "reel_viewer_page",
-        "full_screen_video_player_reels",
         "fb_shorts",
-        "reelsvieweractivity",
-        "fbshortsactivity"
+        "reels_viewer",
+        "reel_viewer",
+        "fb_shorts_viewer",
+        "reels_video",
+        "reels_tray",
+        "reels_feed",
+        "reelsviewer",
+        "fbshorts",
+        "reels_activity",
+        "reelactivity",
+        "reelsmediaviewer",
+        "richvideoplayer",
+        "short_videos",
+        "video_reels",
+        "fb_shorts_full_screen",
+        "full_screen_video_player_reels",
+        "reels_tab",
+        "tab_reels",
+        "reels_composer",
+        "reels_audio",
+        "reels_scrubber"
+    )
+
+    private val facebookReelsTextKeywords = listOf(
+        "remix this reel",
+        "remix reel",
+        "original audio",
+        "original sound",
+        "use audio",
+        "use this audio",
+        "use sound",
+        "use this sound",
+        "reel by",
+        "reels by",
+        "watch reels",
+        "create reel",
+        "like this reel",
+        "comment on this reel",
+        "share this reel",
+        "share reel",
+        "reels and short videos",
+        "reels & short videos",
+        "facebook reels",
+        "reels video",
+        "watch more reels",
+        "scroll for more reels",
+        "রিল রিমিক্স করুন",
+        "রিল রিমিক্স",
+        "মূল অডিও",
+        "অরিজিনাল অডিও",
+        "এই অডিও ব্যবহার করুন",
+        "রিল দেখুন",
+        "রিল তৈরি করুন",
+        "রিলস",
+        "রিল"
     )
 
     private val instagramReelsPlayerIndicators = listOf(
@@ -162,16 +211,51 @@ class ShortsBlockerService : AccessibilityService() {
         "clipsvieweractivity"
     )
 
-    // Dynamic foreground ticker to ensure time tracking always happens
-    // while running at low power when idle or screen is off
+    private val instagramReelsTextKeywords = listOf(
+        "remix this reel",
+        "remix reel",
+        "original audio",
+        "use audio",
+        "use template",
+        "reels",
+        "reel by",
+        "share to reel",
+        "audio ·",
+        "মূল অডিও",
+        "রিলস"
+    )
+
+    @Volatile
+    private var isTickerRunning: Boolean = false
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    stopTicker()
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    if (activeForegroundPackage.isNotBlank() && getTrackedAppInfo(activeForegroundPackage) != null) {
+                        ensureTickerRunning()
+                    }
+                }
+            }
+        }
+    }
+
+    // Dynamic foreground ticker to ensure time tracking happens only when actively inside a tracked app
     private val tickerRunnable = object : Runnable {
         override fun run() {
-            var nextDelay = 1000L
+            var nextDelay = -1L
             try {
                 nextDelay = onTickerTick()
             } catch (_: Exception) {
             }
-            mainHandler.postDelayed(this, nextDelay)
+            if (nextDelay > 0L) {
+                mainHandler.postDelayed(this, nextDelay)
+            } else {
+                isTickerRunning = false
+            }
         }
     }
 
@@ -180,7 +264,14 @@ class ShortsBlockerService : AccessibilityService() {
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         startForegroundNotification()
         checkAndResetDailyUsage(force = true)
-        ensureTickerRunning()
+
+        try {
+            val screenFilter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+            }
+            registerReceiver(screenReceiver, screenFilter)
+        } catch (_: Exception) {}
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -189,7 +280,9 @@ class ShortsBlockerService : AccessibilityService() {
         }
         startForegroundNotification()
         checkAndResetDailyUsage()
-        ensureTickerRunning()
+        if (activeForegroundPackage.isNotBlank() && getTrackedAppInfo(activeForegroundPackage) != null) {
+            ensureTickerRunning()
+        }
         return START_STICKY
     }
 
@@ -197,24 +290,6 @@ class ShortsBlockerService : AccessibilityService() {
         super.onTaskRemoved(rootIntent)
         flushPendingUsageToPrefs()
         startForegroundNotification()
-        ensureTickerRunning()
-
-        // Resurrect service if process is terminated by OS task cleanup
-        try {
-            val restartServiceIntent = Intent(applicationContext, ShortsBlockerService::class.java)
-            val restartPendingIntent = PendingIntent.getService(
-                applicationContext,
-                1,
-                restartServiceIntent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
-            )
-            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager
-            alarmManager?.set(
-                AlarmManager.ELAPSED_REALTIME,
-                SystemClock.elapsedRealtime() + 1000L,
-                restartPendingIntent
-            )
-        } catch (_: Exception) {}
     }
 
     override fun onServiceConnected() {
@@ -222,7 +297,9 @@ class ShortsBlockerService : AccessibilityService() {
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         startForegroundNotification()
         checkAndResetDailyUsage(force = true)
-        ensureTickerRunning()
+        if (activeForegroundPackage.isNotBlank() && getTrackedAppInfo(activeForegroundPackage) != null) {
+            ensureTickerRunning()
+        }
     }
 
     override fun onInterrupt() {
@@ -231,8 +308,10 @@ class ShortsBlockerService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        flushPendingUsageToPrefs()
-        mainHandler.removeCallbacks(tickerRunnable)
+        stopTicker()
+        try {
+            unregisterReceiver(screenReceiver)
+        } catch (_: Exception) {}
     }
 
     private fun startForegroundNotification() {
@@ -263,7 +342,7 @@ class ShortsBlockerService : AccessibilityService() {
             val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle("🛡️ Shorts Blocker সক্রিয় রয়েছে")
-                .setContentText("ব্যাকগ্রাউন্ডে লিমিট ও শর্টস ট্র্যাকিং চলছে")
+                .setContentText("স্মার্ট ব্যাটারি সেভিং মোডে ব্যাকগ্রাউন্ড সুরক্ষা চলছে")
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setContentIntent(pendingIntent)
@@ -282,8 +361,18 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     private fun ensureTickerRunning() {
+        if (!isTickerRunning) {
+            isTickerRunning = true
+            mainHandler.removeCallbacks(tickerRunnable)
+            mainHandler.post(tickerRunnable)
+        }
+    }
+
+    private fun stopTicker() {
+        isTickerRunning = false
         mainHandler.removeCallbacks(tickerRunnable)
-        mainHandler.post(tickerRunnable)
+        lastTickTimestamp = 0L
+        flushPendingUsageToPrefs()
     }
 
     private fun flushPendingUsageToPrefs() {
@@ -337,7 +426,7 @@ class ShortsBlockerService : AccessibilityService() {
             pkg.contains("youtube") && (prefs.getBoolean(PREF_BLOCK_YOUTUBE, true) || prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true) || prefs.getInt("app_limit_youtube", 0) > 0 || prefs.getInt("shorts_limit_youtube", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "youtube", appLabel = "YouTube", packageName = pkg, isCustomApp = false)
             }
-            (pkg.contains("facebook.katana") || pkg.contains("facebook.lite")) &&
+            isFacebookPackage(pkg) &&
                     (prefs.getBoolean(PREF_BLOCK_FACEBOOK, true) || prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true) || prefs.getInt("app_limit_facebook", 0) > 0 || prefs.getInt("shorts_limit_facebook", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "facebook", appLabel = "Facebook", packageName = pkg, isCustomApp = false)
             }
@@ -369,8 +458,8 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     /**
-     * Dynamic ticker: 1000ms when inside tracked app, 2500-3000ms when idle or screen off.
-     * Buffers disk I/O and only inspects nodes when necessary.
+     * Efficient foreground ticker: Runs at 1000ms strictly when user is actively inside a tracked app.
+     * Stops completely (-1L) when phone is locked, screen is off, or user is in untracked apps.
      */
     private fun onTickerTick(): Long {
         if (!::prefs.isInitialized) {
@@ -381,43 +470,43 @@ class ShortsBlockerService : AccessibilityService() {
 
         val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
         if (!isMasterEnabled) {
-            flushPendingUsageToPrefs()
-            return 3000L
+            stopTicker()
+            return -1L
         }
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         if (powerManager?.isInteractive == false) {
-            flushPendingUsageToPrefs()
-            return 3000L
+            stopTicker()
+            return -1L
         }
 
-        var currentPkg = activeForegroundPackage
+        val currentPkg = activeForegroundPackage
         if (currentPkg.isBlank() || isIgnoredSystemPackage(currentPkg)) {
-            val root = try { rootInActiveWindow } catch (_: Exception) { null }
-            val rootPkg = root?.packageName?.toString() ?: ""
-            if (rootPkg.isNotBlank() && !isIgnoredSystemPackage(rootPkg)) {
-                activeForegroundPackage = rootPkg
-                currentPkg = rootPkg
-            }
-        }
-
-        if (currentPkg.isBlank() || isIgnoredSystemPackage(currentPkg)) {
-            flushPendingUsageToPrefs()
-            return 2000L
+            stopTicker()
+            return -1L
         }
 
         val trackedApp = getTrackedAppInfo(currentPkg)
         if (trackedApp == null) {
-            flushPendingUsageToPrefs()
-            return 2000L
+            stopTicker()
+            return -1L
         }
 
         val appKey = trackedApp.appKey
         val appLabel = trackedApp.appLabel
         val now = SystemClock.elapsedRealtime()
 
+        // Calculate accurate elapsed seconds (handles scheduling delays smoothly)
+        val elapsedSec = if (lastTickTimestamp > 0L) {
+            val delta = (now - lastTickTimestamp) / 1000L
+            delta.coerceIn(1L, 3L)
+        } else {
+            1L
+        }
+        lastTickTimestamp = now
+
         // 1. Increment this app's daily used seconds in memory buffer
-        bufferedAppSeconds[appKey] = (bufferedAppSeconds[appKey] ?: 0L) + 1L
+        bufferedAppSeconds[appKey] = (bufferedAppSeconds[appKey] ?: 0L) + elapsedSec
         val currentAppUsed = getEffectiveAppUsedSeconds(appKey)
 
         val appPrefLimitKey = "app_limit_$appKey"
@@ -425,7 +514,7 @@ class ShortsBlockerService : AccessibilityService() {
 
         // 2. Check if App Limit is exceeded
         if (appLimitMinutes > 0 && currentAppUsed >= (appLimitMinutes * 60L)) {
-            flushPendingUsageToPrefs()
+            stopTicker()
             performGlobalAction(GLOBAL_ACTION_HOME)
             performGlobalAction(GLOBAL_ACTION_BACK)
             activeForegroundPackage = ""
@@ -434,49 +523,45 @@ class ShortsBlockerService : AccessibilityService() {
                 showAppLimitToast(appLabel, appLimitMinutes)
                 recordBlockEvent("$appLabel (App Limit: ${appLimitMinutes}m)", currentPkg)
             }
-            return 2500L
+            return -1L
         }
 
-        // 3. Try auto-skipping video ads periodically (every second) when YouTube or Facebook is open
-        if (appKey == "youtube" || appKey == "facebook") {
-            val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
-            if (autoSkip) {
-                val root = try { rootInActiveWindow } catch (_: Exception) { null }
-                if (root != null) {
-                    tryAutoSkipAds(root, currentPkg)
-                }
-            }
-        }
-
-        // 4. If it's YouTube / Facebook / Instagram, track Shorts / Reels time
-        // Only inspect if Shorts limit is not set to unlimited (-1)
+        // 3. Inspect window only if needed for auto-skipping ads or checking Shorts limit
         val shortsPrefLimitKey = "shorts_limit_$appKey"
         val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0) // -1: Unlimited, 0: Block (Off), >0: Mins
+        val needShortsCheck = !trackedApp.isCustomApp && shortsLimitMinutes != -1
+        val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true) && (appKey == "youtube" || appKey == "facebook")
 
-        if (!trackedApp.isCustomApp && shortsLimitMinutes != -1) {
+        if (needShortsCheck || autoSkip) {
             val root = try { rootInActiveWindow } catch (_: Exception) { null }
             if (root != null) {
-                val isShortsOpen = when (appKey) {
-                    "youtube" -> isYouTubeShortsPlayerActive(root)
-                    "facebook" -> isFacebookReelsPlayerActive(root)
-                    "instagram" -> isInstagramReelsPlayerActive(root)
-                    else -> false
+                if (autoSkip) {
+                    tryAutoSkipAds(root, currentPkg)
                 }
 
-                if (isShortsOpen) {
-                    bufferedShortsSeconds[appKey] = (bufferedShortsSeconds[appKey] ?: 0L) + 1L
-                    val currentShortsUsed = getEffectiveShortsUsedSeconds(appKey)
+                if (needShortsCheck) {
+                    val isShortsOpen = when (appKey) {
+                        "youtube" -> isYouTubeShortsPlayerActive(root)
+                        "facebook" -> isFacebookReelsPlayerActive(root)
+                        "instagram" -> isInstagramReelsPlayerActive(root)
+                        else -> false
+                    }
 
-                    if (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L)) {
-                        flushPendingUsageToPrefs()
-                        handleShortsBlockAction(appKey, currentPkg, root)
+                    if (isShortsOpen) {
+                        bufferedShortsSeconds[appKey] = (bufferedShortsSeconds[appKey] ?: 0L) + elapsedSec
+                        val currentShortsUsed = getEffectiveShortsUsedSeconds(appKey)
+
+                        if (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L)) {
+                            flushPendingUsageToPrefs()
+                            handleShortsBlockAction(appKey, currentPkg, root)
+                        }
                     }
                 }
             }
         }
 
-        // Periodically flush buffer to disk every 10 seconds to save battery
-        if (now - lastFlushTime >= 10_000L) {
+        // Periodically flush buffer to disk every 2 seconds so limits and UI stats stay accurate
+        if (now - lastFlushTime >= 2000L) {
             lastFlushTime = now
             flushPendingUsageToPrefs()
         }
@@ -485,12 +570,27 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     private fun isIgnoredSystemPackage(pkg: String): Boolean {
-        val lower = pkg.lowercase()
-        return lower.contains("inputmethod") ||
+        val lower = pkg.lowercase().trim()
+        return lower.isEmpty() ||
+                lower == "android" ||
+                lower.contains("systemui") ||
+                lower.contains("inputmethod") ||
                 lower.contains("keyboard") ||
                 lower.contains("latin") ||
                 lower.contains("toast") ||
-                lower.contains("volume")
+                lower.contains("volume") ||
+                lower.contains("overlay") ||
+                lower.contains("permissioncontroller") ||
+                lower.contains("packageinstaller") ||
+                lower.contains("screenshot")
+    }
+
+    private fun isFacebookPackage(pkg: String): Boolean {
+        val lower = pkg.lowercase().trim()
+        return lower.contains("facebook.katana") ||
+                lower.contains("facebook.lite") ||
+                lower.contains("facebook.wakizashi") ||
+                (lower.startsWith("com.facebook.") && !lower.contains("orca") && !lower.contains("messenger"))
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -514,7 +614,11 @@ class ShortsBlockerService : AccessibilityService() {
             lastPackageEventTime = SystemClock.elapsedRealtime()
             if (getTrackedAppInfo(packageName) != null) {
                 ensureTickerRunning()
+            } else {
+                stopTicker()
             }
+        } else if (getTrackedAppInfo(packageName) != null) {
+            ensureTickerRunning()
         }
 
         // Fast rejection: If not browser and not tracked app, ignore immediately! Zero tree inspection.
@@ -529,19 +633,19 @@ class ShortsBlockerService : AccessibilityService() {
         // 1. Check if event is in a Web Browser for Adult/Porn Sites or Custom Blocked Domains or Ads
         if (isBrowser) {
             val now = SystemClock.elapsedRealtime()
-            if (isWindowStateChange || now - lastBrowserCheckTimestamp >= 800L) {
+            if (isWindowStateChange || now - lastBrowserCheckTimestamp >= 1200L) {
                 lastBrowserCheckTimestamp = now
                 handleBrowserEvent(packageName)
             }
             return
         }
 
-        // 2. Try auto-skipping video ads if enabled (for YouTube and Facebook, throttled to 500ms)
+        // 2. Try auto-skipping video ads if enabled (for YouTube and Facebook, throttled to 1500ms)
         if (trackedApp != null && (packageName.contains("youtube") || packageName.contains("facebook"))) {
             val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
             if (autoSkip) {
                 val now = SystemClock.elapsedRealtime()
-                if (now - lastAdSkipCheckTime >= 500L) {
+                if (now - lastAdSkipCheckTime >= 1500L) {
                     lastAdSkipCheckTime = now
                     val root: AccessibilityNodeInfo? = event.source ?: try { rootInActiveWindow } catch (_: Exception) { null }
                     if (root != null) {
@@ -586,11 +690,11 @@ class ShortsBlockerService : AccessibilityService() {
                 val isShortsOpen = when {
                     isCustomApp -> true
                     root != null && packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root, eventClassName)
-                    root != null && (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) -> isFacebookReelsPlayerActive(root, eventClassName)
+                    root != null && isFacebookPackage(packageName) -> isFacebookReelsPlayerActive(root, eventClassName)
                     root != null && packageName.contains("instagram") -> isInstagramReelsPlayerActive(root, eventClassName)
                     packageName.contains("youtube") && (eventClassName.contains("ReelWatchActivity", ignoreCase = true) || eventClassName.contains("ShortsActivity", ignoreCase = true)) -> true
                     packageName.contains("instagram") && eventClassName.contains("ClipsViewerActivity", ignoreCase = true) -> true
-                    (packageName.contains("facebook.katana") || packageName.contains("facebook.lite")) && eventClassName.contains("ReelsViewerActivity", ignoreCase = true) -> true
+                    isFacebookPackage(packageName) && (eventClassName.contains("Reels", ignoreCase = true) || eventClassName.contains("FbShorts", ignoreCase = true) || eventClassName.contains("ReelViewer", ignoreCase = true)) -> true
                     else -> false
                 }
 
@@ -714,7 +818,7 @@ class ShortsBlockerService : AccessibilityService() {
         keywords: List<String>,
         depth: Int = 0
     ): AccessibilityNodeInfo? {
-        if (depth > 20) return null
+        if (depth > 12) return null
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase()?.trim() ?: ""
@@ -740,7 +844,7 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     private fun findBrowserUrlOrKeywords(node: AccessibilityNodeInfo, depth: Int = 0): String? {
-        if (depth > 12) return null
+        if (depth > 8) return null
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase() ?: ""
@@ -859,17 +963,19 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     private fun isFacebookReelsPlayerActive(root: AccessibilityNodeInfo, className: String = ""): Boolean {
-        if (className.contains("ReelsViewerActivity", ignoreCase = true) || className.contains("FbShortsViewerFragment", ignoreCase = true)) {
+        val lowerClass = className.lowercase()
+        if (lowerClass.contains("reels") || lowerClass.contains("fbshorts") || lowerClass.contains("reelviewer")) {
             return true
         }
-        return hasMatchingPlayerNode(root, facebookReelsPlayerIndicators)
+        return hasMatchingPlayerNode(root, facebookReelsPlayerIndicators, facebookReelsTextKeywords)
     }
 
     private fun isInstagramReelsPlayerActive(root: AccessibilityNodeInfo, className: String = ""): Boolean {
-        if (className.contains("ClipsViewerActivity", ignoreCase = true) || className.contains("ClipsViewerFragment", ignoreCase = true)) {
+        val lowerClass = className.lowercase()
+        if (lowerClass.contains("clips") || lowerClass.contains("reelviewer")) {
             return true
         }
-        return hasMatchingPlayerNode(root, instagramReelsPlayerIndicators)
+        return hasMatchingPlayerNode(root, instagramReelsPlayerIndicators, instagramReelsTextKeywords)
     }
 
     private fun handleShortsBlockAction(appKey: String, packageName: String, root: AccessibilityNodeInfo?) {
@@ -890,24 +996,19 @@ class ShortsBlockerService : AccessibilityService() {
 
         if (appKey == "youtube") {
             // For YouTube: Exit Shorts video and return directly to YouTube Home page.
-            // Under NO circumstance do we call GLOBAL_ACTION_HOME (which would close the YouTube app).
-
-            // 1. Try to directly click the YouTube Home tab if visible
             val homeClicked = tryClickYouTubeHomeTab(root)
             if (!homeClicked) {
                 // If player is full-screen, press Back to exit the Shorts video player
                 performGlobalAction(GLOBAL_ACTION_BACK)
             }
 
-            // 2. Follow-up check: Ensure we stay inside YouTube and are safely on the Home feed
+            // Follow-up check: Ensure we stay inside YouTube and are safely on the Home feed
             mainHandler.postDelayed({
                 try {
                     val currentRoot = rootInActiveWindow ?: return@postDelayed
                     val currentPkg = currentRoot.packageName?.toString() ?: ""
                     if (currentPkg.contains("youtube")) {
                         if (isYouTubeShortsPlayerActive(currentRoot)) {
-                            // If still showing Shorts (e.g. user selected bottom Shorts tab or opened direct URL),
-                            // click Home tab or bring YouTube's main launcher activity (Home) to front
                             if (!tryClickYouTubeHomeTab(currentRoot)) {
                                 launchAppHomeActivity("com.google.android.youtube")
                             }
@@ -915,8 +1016,26 @@ class ShortsBlockerService : AccessibilityService() {
                     }
                 } catch (_: Exception) {}
             }, 300L)
+        } else if (appKey == "facebook") {
+            // For Facebook: Try clicking Home/Feed tab first, or press Back to exit full-screen Reels viewer
+            val homeClicked = tryClickFacebookHomeTab(root)
+            if (!homeClicked) {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+
+            mainHandler.postDelayed({
+                try {
+                    val currentRoot = rootInActiveWindow ?: return@postDelayed
+                    val currentPkg = currentRoot.packageName?.toString() ?: ""
+                    if (isFacebookPackage(currentPkg) && isFacebookReelsPlayerActive(currentRoot)) {
+                        if (!tryClickFacebookHomeTab(currentRoot)) {
+                            launchAppHomeActivity(currentPkg)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }, 300L)
         } else {
-            // For Facebook / Instagram: Press Back to return to normal feed
+            // For Instagram: Press Back to return to normal feed
             performGlobalAction(GLOBAL_ACTION_BACK)
             mainHandler.postDelayed({
                 try {
@@ -937,13 +1056,50 @@ class ShortsBlockerService : AccessibilityService() {
         }
     }
 
+    private fun tryClickFacebookHomeTab(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        return findAndClickFacebookHomeNode(root, depth = 0)
+    }
+
+    private fun findAndClickFacebookHomeNode(node: AccessibilityNodeInfo, depth: Int): Boolean {
+        if (depth > 14) return false
+
+        val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+        val text = node.text?.toString()?.lowercase() ?: ""
+        val viewId = node.viewIdResourceName?.lowercase() ?: ""
+
+        val isHomeCandidate = (desc == "home" || desc.startsWith("home,") || desc == "হোম" || desc.contains("হোম") ||
+                desc == "news feed" || desc.startsWith("news feed,") || desc == "নিউজ ফিড" || desc.contains("নিউজ ফিড") ||
+                text == "home" || text == "হোম" || text == "news feed" || text == "নিউজ ফিড" ||
+                viewId.endsWith("tab_feed") || viewId.endsWith("tab_home") || viewId.contains("feed_tab") || viewId.contains("home_tab")) &&
+                !desc.contains("home screen") && !desc.contains("হোম স্ক্রীন")
+
+        if (isHomeCandidate) {
+            if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
+            val parent = node.parent
+            if (parent != null && parent.isClickable && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (findAndClickFacebookHomeNode(child, depth + 1)) {
+                return true
+            }
+        }
+        return false
+    }
+
     private fun tryClickYouTubeHomeTab(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
         return findAndClickHomeNode(root, depth = 0)
     }
 
     private fun findAndClickHomeNode(node: AccessibilityNodeInfo, depth: Int): Boolean {
-        if (depth > 28) return false
+        if (depth > 14) return false
 
         val desc = node.contentDescription?.toString()?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase() ?: ""
@@ -1008,7 +1164,7 @@ class ShortsBlockerService : AccessibilityService() {
         textKeywords: List<String> = emptyList(),
         depth: Int = 0
     ): Boolean {
-        if (depth > 28) return false
+        if (depth > 14) return false
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val className = node.className?.toString()?.lowercase() ?: ""
@@ -1026,6 +1182,13 @@ class ShortsBlockerService : AccessibilityService() {
         // Detect if Shorts navigation tab is selected in YouTube
         val isShortsTab = (contentDesc == "shorts" || text == "shorts" || contentDesc.contains("শর্টস") || text.contains("শর্টস") || viewId.contains("shorts_pivot"))
         if (isShortsTab && (node.isSelected || className.contains("tab", ignoreCase = true) && !node.isClickable)) {
+            return true
+        }
+
+        // Detect if Reels navigation tab is selected in Facebook
+        val isFacebookReelsTab = (contentDesc == "reels" || text == "reels" || contentDesc == "রিলস" || text == "রিলস" ||
+                contentDesc.startsWith("reels,") || contentDesc.contains("reels tab") || viewId.contains("reels_tab") || viewId.contains("tab_reels"))
+        if (isFacebookReelsTab && (node.isSelected || node.isChecked || (className.contains("tab", ignoreCase = true) && !node.isClickable))) {
             return true
         }
 
