@@ -43,6 +43,7 @@ class ShortsBlockerService : AccessibilityService() {
     private var lastAdSkipRecordTime: Long = 0L
     private var lastDateCheckTime: Long = 0L
     private var lastBrowserCheckTimestamp: Long = 0L
+    private var lastShortsCheckTimestamp: Long = 0L
     private var lastAdSkipCheckTime: Long = 0L
     private var lastFlushTime: Long = 0L
     private var lastTickTimestamp: Long = 0L
@@ -55,6 +56,62 @@ class ShortsBlockerService : AccessibilityService() {
     private var activeForegroundPackage: String = ""
     @Volatile
     private var lastPackageEventTime: Long = 0L
+
+    @Volatile
+    private var isScreenInteractive: Boolean = true
+
+    // In-memory cached preferences to avoid continuous disk I/O and object allocations
+    @Volatile private var cachedMasterEnabled = true
+    @Volatile private var cachedBlockYoutube = true
+    @Volatile private var cachedBlockFacebook = true
+    @Volatile private var cachedBlockInstagram = true
+    @Volatile private var cachedBlockAdult = true
+    @Volatile private var cachedBlockAds = true
+    @Volatile private var cachedAutoSkipAds = true
+    @Volatile private var cachedShowToast = false
+    @Volatile private var cachedCustomWebsites: List<String> = emptyList()
+    @Volatile private var cachedCustomAdFilters: List<String> = emptyList()
+    @Volatile private var cachedCustomApps: List<Triple<String, String, Boolean>> = emptyList()
+
+    private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        reloadPreferencesCache()
+    }
+
+    private fun reloadPreferencesCache() {
+        if (!::prefs.isInitialized) return
+        cachedMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
+        cachedBlockYoutube = prefs.getBoolean(PREF_BLOCK_YOUTUBE, true)
+        cachedBlockFacebook = prefs.getBoolean(PREF_BLOCK_FACEBOOK, true)
+        cachedBlockInstagram = prefs.getBoolean(PREF_BLOCK_INSTAGRAM, true)
+        cachedBlockAdult = prefs.getBoolean(PREF_BLOCK_ADULT_WEBSITES, true)
+        cachedBlockAds = prefs.getBoolean(PREF_BLOCK_ADS, true)
+        cachedAutoSkipAds = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
+        cachedShowToast = prefs.getBoolean(PREF_SHOW_BLOCK_TOAST, false)
+
+        val customSitesStr = prefs.getString(PREF_CUSTOM_WEBSITES, "") ?: ""
+        cachedCustomWebsites = customSitesStr.split(";")
+            .filter { it.isNotBlank() }
+            .mapNotNull {
+                val parts = it.split("#")
+                if (parts.size >= 2 && parts[1].toBoolean()) parts[0].lowercase().trim() else null
+            }
+
+        val customAdFiltersStr = prefs.getString(PREF_CUSTOM_AD_FILTERS, "") ?: ""
+        cachedCustomAdFilters = customAdFiltersStr.split(";")
+            .filter { it.isNotBlank() }
+            .mapNotNull {
+                val parts = it.split("#")
+                if (parts.size >= 2 && parts[1].toBoolean()) parts[0].lowercase().trim() else null
+            }
+
+        val customAppsStr = prefs.getString(PREF_CUSTOM_APPS, "") ?: ""
+        cachedCustomApps = customAppsStr.split(";")
+            .filter { it.isNotBlank() }
+            .mapNotNull {
+                val parts = it.split("#")
+                if (parts.size >= 3) Triple(parts[0], parts[1], parts[2].toBoolean()) else null
+            }
+    }
 
     // Adult keywords and popular porn domain substrings
     private val adultKeywords = listOf(
@@ -232,9 +289,11 @@ class ShortsBlockerService : AccessibilityService() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 Intent.ACTION_SCREEN_OFF -> {
+                    isScreenInteractive = false
                     stopTicker()
                 }
                 Intent.ACTION_SCREEN_ON -> {
+                    isScreenInteractive = true
                     if (activeForegroundPackage.isNotBlank() && getTrackedAppInfo(activeForegroundPackage) != null) {
                         ensureTickerRunning()
                     }
@@ -262,6 +321,12 @@ class ShortsBlockerService : AccessibilityService() {
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+        reloadPreferencesCache()
+
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        isScreenInteractive = powerManager?.isInteractive ?: true
+
         startForegroundNotification()
         checkAndResetDailyUsage(force = true)
 
@@ -277,10 +342,15 @@ class ShortsBlockerService : AccessibilityService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!::prefs.isInitialized) {
             prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
         }
+        reloadPreferencesCache()
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        isScreenInteractive = powerManager?.isInteractive ?: true
+
         startForegroundNotification()
         checkAndResetDailyUsage()
-        if (activeForegroundPackage.isNotBlank() && getTrackedAppInfo(activeForegroundPackage) != null) {
+        if (isScreenInteractive && activeForegroundPackage.isNotBlank() && getTrackedAppInfo(activeForegroundPackage) != null) {
             ensureTickerRunning()
         }
         return START_STICKY
@@ -294,10 +364,17 @@ class ShortsBlockerService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (!::prefs.isInitialized) {
+            prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+        }
+        reloadPreferencesCache()
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        isScreenInteractive = powerManager?.isInteractive ?: true
+
         startForegroundNotification()
         checkAndResetDailyUsage(force = true)
-        if (activeForegroundPackage.isNotBlank() && getTrackedAppInfo(activeForegroundPackage) != null) {
+        if (isScreenInteractive && activeForegroundPackage.isNotBlank() && getTrackedAppInfo(activeForegroundPackage) != null) {
             ensureTickerRunning()
         }
     }
@@ -309,6 +386,9 @@ class ShortsBlockerService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         stopTicker()
+        try {
+            prefs.unregisterOnSharedPreferenceChangeListener(prefChangeListener)
+        } catch (_: Exception) {}
         try {
             unregisterReceiver(screenReceiver)
         } catch (_: Exception) {}
@@ -415,35 +495,23 @@ class ShortsBlockerService : AccessibilityService() {
 
     private fun getTrackedAppInfo(pkg: String): TrackedAppInfo? {
         if (pkg.isBlank()) return null
-        if (!::prefs.isInitialized) {
-            prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        }
-
-        val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
-        if (!isMasterEnabled) return null
+        if (!cachedMasterEnabled) return null
 
         return when {
-            pkg.contains("youtube") && (prefs.getBoolean(PREF_BLOCK_YOUTUBE, true) || prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true) || prefs.getInt("app_limit_youtube", 0) > 0 || prefs.getInt("shorts_limit_youtube", 0) >= 0) -> {
+            pkg.contains("youtube") && (cachedBlockYoutube || cachedAutoSkipAds || prefs.getInt("app_limit_youtube", 0) > 0 || prefs.getInt("shorts_limit_youtube", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "youtube", appLabel = "YouTube", packageName = pkg, isCustomApp = false)
             }
             isFacebookPackage(pkg) &&
-                    (prefs.getBoolean(PREF_BLOCK_FACEBOOK, true) || prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true) || prefs.getInt("app_limit_facebook", 0) > 0 || prefs.getInt("shorts_limit_facebook", 0) >= 0) -> {
+                    (cachedBlockFacebook || cachedAutoSkipAds || prefs.getInt("app_limit_facebook", 0) > 0 || prefs.getInt("shorts_limit_facebook", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "facebook", appLabel = "Facebook", packageName = pkg, isCustomApp = false)
             }
-            pkg.contains("instagram") && (prefs.getBoolean(PREF_BLOCK_INSTAGRAM, true) || prefs.getInt("app_limit_instagram", 0) > 0 || prefs.getInt("shorts_limit_instagram", 0) >= 0) -> {
+            pkg.contains("instagram") && (cachedBlockInstagram || prefs.getInt("app_limit_instagram", 0) > 0 || prefs.getInt("shorts_limit_instagram", 0) >= 0) -> {
                 TrackedAppInfo(appKey = "instagram", appLabel = "Instagram", packageName = pkg, isCustomApp = false)
             }
             else -> {
-                val customAppsStr = prefs.getString(PREF_CUSTOM_APPS, "") ?: ""
-                val matchingCustom = customAppsStr.split(";")
-                    .filter { it.isNotBlank() }
-                    .mapNotNull {
-                        val parts = it.split("#")
-                        if (parts.size >= 3) Triple(parts[0], parts[1], parts[2].toBoolean()) else null
-                    }
-                    .firstOrNull { (_, customPkg, isEnabled) ->
-                        isEnabled && (pkg.equals(customPkg, ignoreCase = true) || pkg.contains(customPkg, ignoreCase = true))
-                    }
+                val matchingCustom = cachedCustomApps.firstOrNull { (_, customPkg, isEnabled) ->
+                    isEnabled && (pkg.equals(customPkg, ignoreCase = true) || pkg.contains(customPkg, ignoreCase = true))
+                }
 
                 if (matchingCustom != null) {
                     TrackedAppInfo(
@@ -462,23 +530,12 @@ class ShortsBlockerService : AccessibilityService() {
      * Stops completely (-1L) when phone is locked, screen is off, or user is in untracked apps.
      */
     private fun onTickerTick(): Long {
-        if (!::prefs.isInitialized) {
-            prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (!isScreenInteractive || !cachedMasterEnabled) {
+            stopTicker()
+            return -1L
         }
 
         checkAndResetDailyUsage()
-
-        val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
-        if (!isMasterEnabled) {
-            stopTicker()
-            return -1L
-        }
-
-        val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
-        if (powerManager?.isInteractive == false) {
-            stopTicker()
-            return -1L
-        }
 
         val currentPkg = activeForegroundPackage
         if (currentPkg.isBlank() || isIgnoredSystemPackage(currentPkg)) {
@@ -530,32 +587,36 @@ class ShortsBlockerService : AccessibilityService() {
         val shortsPrefLimitKey = "shorts_limit_$appKey"
         val shortsLimitMinutes = prefs.getInt(shortsPrefLimitKey, 0) // -1: Unlimited, 0: Block (Off), >0: Mins
         val needShortsCheck = !trackedApp.isCustomApp && shortsLimitMinutes != -1
-        val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true) && (appKey == "youtube" || appKey == "facebook")
+        val autoSkip = cachedAutoSkipAds && (appKey == "youtube" || appKey == "facebook")
 
         if (needShortsCheck || autoSkip) {
             val root = try { rootInActiveWindow } catch (_: Exception) { null }
             if (root != null) {
-                if (autoSkip) {
-                    tryAutoSkipAds(root, currentPkg)
-                }
-
-                if (needShortsCheck) {
-                    val isShortsOpen = when (appKey) {
-                        "youtube" -> isYouTubeShortsPlayerActive(root)
-                        "facebook" -> isFacebookReelsPlayerActive(root)
-                        "instagram" -> isInstagramReelsPlayerActive(root)
-                        else -> false
+                try {
+                    if (autoSkip) {
+                        tryAutoSkipAds(root, currentPkg)
                     }
 
-                    if (isShortsOpen) {
-                        bufferedShortsSeconds[appKey] = (bufferedShortsSeconds[appKey] ?: 0L) + elapsedSec
-                        val currentShortsUsed = getEffectiveShortsUsedSeconds(appKey)
+                    if (needShortsCheck) {
+                        val isShortsOpen = when (appKey) {
+                            "youtube" -> isYouTubeShortsPlayerActive(root)
+                            "facebook" -> isFacebookReelsPlayerActive(root)
+                            "instagram" -> isInstagramReelsPlayerActive(root)
+                            else -> false
+                        }
 
-                        if (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L)) {
-                            flushPendingUsageToPrefs()
-                            handleShortsBlockAction(appKey, currentPkg, root)
+                        if (isShortsOpen) {
+                            bufferedShortsSeconds[appKey] = (bufferedShortsSeconds[appKey] ?: 0L) + elapsedSec
+                            val currentShortsUsed = getEffectiveShortsUsedSeconds(appKey)
+
+                            if (shortsLimitMinutes == 0 || currentShortsUsed >= (shortsLimitMinutes * 60L)) {
+                                flushPendingUsageToPrefs()
+                                handleShortsBlockAction(appKey, currentPkg, root)
+                            }
                         }
                     }
+                } finally {
+                    try { root.recycle() } catch (_: Exception) {}
                 }
             }
         }
@@ -594,13 +655,7 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
-        if (!::prefs.isInitialized) {
-            prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        }
-
-        val isMasterEnabled = prefs.getBoolean(PREF_ENABLED, true)
-        if (!isMasterEnabled) return
+        if (event == null || !isScreenInteractive || !cachedMasterEnabled) return
 
         val packageName = event.packageName?.toString() ?: return
         if (packageName.isBlank() || isIgnoredSystemPackage(packageName)) return
@@ -630,9 +685,10 @@ class ShortsBlockerService : AccessibilityService() {
 
         checkAndResetDailyUsage()
 
+        val now = SystemClock.elapsedRealtime()
+
         // 1. Check if event is in a Web Browser for Adult/Porn Sites or Custom Blocked Domains or Ads
         if (isBrowser) {
-            val now = SystemClock.elapsedRealtime()
             if (isWindowStateChange || now - lastBrowserCheckTimestamp >= 1200L) {
                 lastBrowserCheckTimestamp = now
                 handleBrowserEvent(packageName)
@@ -640,16 +696,16 @@ class ShortsBlockerService : AccessibilityService() {
             return
         }
 
-        // 2. Try auto-skipping video ads if enabled (for YouTube and Facebook, throttled to 1500ms)
+        // 2. Try auto-skipping video ads if enabled (for YouTube and Facebook, throttled to 2000ms)
         if (trackedApp != null && (packageName.contains("youtube") || packageName.contains("facebook"))) {
-            val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
-            if (autoSkip) {
-                val now = SystemClock.elapsedRealtime()
-                if (now - lastAdSkipCheckTime >= 1500L) {
-                    lastAdSkipCheckTime = now
-                    val root: AccessibilityNodeInfo? = event.source ?: try { rootInActiveWindow } catch (_: Exception) { null }
-                    if (root != null) {
+            if (cachedAutoSkipAds && (now - lastAdSkipCheckTime >= 2000L)) {
+                lastAdSkipCheckTime = now
+                val root: AccessibilityNodeInfo? = try { rootInActiveWindow } catch (_: Exception) { null }
+                if (root != null) {
+                    try {
                         tryAutoSkipAds(root, packageName)
+                    } finally {
+                        try { root.recycle() } catch (_: Exception) {}
                     }
                 }
             }
@@ -660,8 +716,6 @@ class ShortsBlockerService : AccessibilityService() {
             val appKey = trackedApp.appKey
             val appLabel = trackedApp.appLabel
             val isCustomApp = trackedApp.isCustomApp
-
-            val now = SystemClock.elapsedRealtime()
 
             // Immediate check: If this app's App Limit is already exceeded, kick user out to Home
             val appLimitMinutes = prefs.getInt("app_limit_$appKey", 0)
@@ -684,98 +738,113 @@ class ShortsBlockerService : AccessibilityService() {
 
             // Only check shorts if shorts limit is not unlimited (-1)
             if (shortsLimitMinutes != -1) {
-                val eventClassName = event.className?.toString() ?: ""
-                val root: AccessibilityNodeInfo? = event.source ?: try { rootInActiveWindow } catch (_: Exception) { null }
+                // Adaptive rate-limiting: Throttle content-change events to at most once every 500ms
+                if (!isWindowStateChange && (now - lastShortsCheckTimestamp < 500L)) {
+                    return
+                }
+                lastShortsCheckTimestamp = now
 
-                val isShortsOpen = when {
-                    isCustomApp -> true
-                    root != null && packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root, eventClassName)
-                    root != null && isFacebookPackage(packageName) -> isFacebookReelsPlayerActive(root, eventClassName)
-                    root != null && packageName.contains("instagram") -> isInstagramReelsPlayerActive(root, eventClassName)
+                val eventClassName = event.className?.toString() ?: ""
+
+                // Fast-path: Check activity class name BEFORE retrieving root or inspecting tree!
+                val isKnownShortsActivity = when {
                     packageName.contains("youtube") && (eventClassName.contains("ReelWatchActivity", ignoreCase = true) || eventClassName.contains("ShortsActivity", ignoreCase = true)) -> true
                     packageName.contains("instagram") && eventClassName.contains("ClipsViewerActivity", ignoreCase = true) -> true
                     isFacebookPackage(packageName) && (eventClassName.contains("Reels", ignoreCase = true) || eventClassName.contains("FbShorts", ignoreCase = true) || eventClassName.contains("ReelViewer", ignoreCase = true)) -> true
                     else -> false
                 }
 
-                if (isShortsOpen) {
-                    val todayShortsUsedSeconds = getEffectiveShortsUsedSeconds(appKey)
-
-                    // -1 = Unlimited (no block), 0 = Block, > 0 = time limit
-                    if (shortsLimitMinutes == 0 || todayShortsUsedSeconds >= (shortsLimitMinutes * 60L)) {
-                        flushPendingUsageToPrefs()
-                        handleShortsBlockAction(appKey, packageName, root)
+                var root: AccessibilityNodeInfo? = null
+                val isShortsOpen = when {
+                    isCustomApp -> true
+                    isKnownShortsActivity -> true
+                    else -> {
+                        root = try { rootInActiveWindow } catch (_: Exception) { null }
+                        if (root != null) {
+                            when {
+                                packageName.contains("youtube") -> isYouTubeShortsPlayerActive(root, eventClassName)
+                                isFacebookPackage(packageName) -> isFacebookReelsPlayerActive(root, eventClassName)
+                                packageName.contains("instagram") -> isInstagramReelsPlayerActive(root, eventClassName)
+                                else -> false
+                            }
+                        } else {
+                            false
+                        }
                     }
+                }
+
+                try {
+                    if (isShortsOpen) {
+                        val todayShortsUsedSeconds = getEffectiveShortsUsedSeconds(appKey)
+
+                        // -1 = Unlimited (no block), 0 = Block, > 0 = time limit
+                        if (shortsLimitMinutes == 0 || todayShortsUsedSeconds >= (shortsLimitMinutes * 60L)) {
+                            flushPendingUsageToPrefs()
+                            handleShortsBlockAction(appKey, packageName, root)
+                        }
+                    }
+                } finally {
+                    try { root?.recycle() } catch (_: Exception) {}
                 }
             }
         }
     }
 
     private fun handleBrowserEvent(packageName: String) {
-        val blockAdult = prefs.getBoolean(PREF_BLOCK_ADULT_WEBSITES, true)
-        val blockAds = prefs.getBoolean(PREF_BLOCK_ADS, true)
-        
-        val customSitesStr = prefs.getString(PREF_CUSTOM_WEBSITES, "") ?: ""
-        val customSites = customSitesStr.split(";")
-            .filter { it.isNotBlank() }
-            .mapNotNull {
-                val parts = it.split("#")
-                if (parts.size >= 2 && parts[1].toBoolean()) parts[0].lowercase().trim() else null
-            }
+        val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return
+        try {
+            val urlOrContent = findBrowserUrlOrKeywords(root) ?: return
 
-        val customAdFiltersStr = prefs.getString(PREF_CUSTOM_AD_FILTERS, "") ?: ""
-        val customAdFilters = customAdFiltersStr.split(";")
-            .filter { it.isNotBlank() }
-            .mapNotNull {
-                val parts = it.split("#")
-                if (parts.size >= 2 && parts[1].toBoolean()) parts[0].lowercase().trim() else null
-            }
+            val containsAdult = cachedBlockAdult && adultKeywords.any { urlOrContent.contains(it) }
+            val containsCustomSite = cachedCustomWebsites.any { it.isNotEmpty() && urlOrContent.contains(it) }
+            val containsAdNetwork = cachedBlockAds && (defaultAdNetworks.any { urlOrContent.contains(it) } || cachedCustomAdFilters.any { it.isNotEmpty() && urlOrContent.contains(it) })
 
-        val root = rootInActiveWindow ?: return
-        val urlOrContent = findBrowserUrlOrKeywords(root) ?: return
-
-        val containsAdult = blockAdult && adultKeywords.any { urlOrContent.contains(it) }
-        val containsCustomSite = customSites.any { it.isNotEmpty() && urlOrContent.contains(it) }
-        val containsAdNetwork = blockAds && (defaultAdNetworks.any { urlOrContent.contains(it) } || customAdFilters.any { it.isNotEmpty() && urlOrContent.contains(it) })
-
-        if (containsAdult || containsCustomSite || containsAdNetwork) {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
-                lastBackActionTimestamp = now
-                val label = when {
-                    containsAdult -> "Adult Website Blocked"
-                    containsAdNetwork -> "Ad Popup / Network Blocked"
-                    else -> "Custom Website Blocked"
+            if (containsAdult || containsCustomSite || containsAdNetwork) {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastBackActionTimestamp >= THROTTLE_INTERVAL_MS) {
+                    lastBackActionTimestamp = now
+                    val label = when {
+                        containsAdult -> "Adult Website Blocked"
+                        containsAdNetwork -> "Ad Popup / Network Blocked"
+                        else -> "Custom Website Blocked"
+                    }
+                    recordBlockEvent(label, packageName)
+                    if (containsAdult || containsCustomSite) {
+                        showReminderToast()
+                    }
+                    performGlobalAction(GLOBAL_ACTION_BACK)
                 }
-                recordBlockEvent(label, packageName)
-                if (containsAdult || containsCustomSite) {
-                    showReminderToast()
-                }
-                performGlobalAction(GLOBAL_ACTION_BACK)
             }
+        } finally {
+            try { root.recycle() } catch (_: Exception) {}
         }
     }
 
     private fun tryAutoSkipAds(root: AccessibilityNodeInfo, packageName: String): Boolean {
-        val autoSkip = prefs.getBoolean(PREF_AUTO_SKIP_VIDEO_ADS, true)
-        if (!autoSkip) return false
+        if (!cachedAutoSkipAds) return false
 
         val skipButton = findClickableNodeMatchingKeywords(root, skipAdButtonKeywords) ?: return false
+        var clicked = false
+        try {
+            // Attempt 1: Standard ACTION_CLICK on the node or its clickable ancestors
+            clicked = clickNodeOrParent(skipButton)
 
-        // Attempt 1: Standard ACTION_CLICK on the node or its clickable ancestors
-        var clicked = clickNodeOrParent(skipButton)
-
-        // Attempt 2: If standard click fails or node isn't reporting clickable, perform a dispatchGesture click at center coordinates
-        if (!clicked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            val rect = android.graphics.Rect()
-            skipButton.getBoundsInScreen(rect)
-            if (rect.width() > 0 && rect.height() > 0) {
-                val clickPath = android.graphics.Path().apply {
-                    moveTo(rect.centerX().toFloat(), rect.centerY().toFloat())
+            // Attempt 2: If standard click fails or node isn't reporting clickable, perform a dispatchGesture click at center coordinates
+            if (!clicked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val rect = android.graphics.Rect()
+                skipButton.getBoundsInScreen(rect)
+                if (rect.width() > 0 && rect.height() > 0) {
+                    val clickPath = android.graphics.Path().apply {
+                        moveTo(rect.centerX().toFloat(), rect.centerY().toFloat())
+                    }
+                    val stroke = GestureDescription.StrokeDescription(clickPath, 0L, 50L)
+                    val gesture = GestureDescription.Builder().addStroke(stroke).build()
+                    clicked = dispatchGesture(gesture, null, null)
                 }
-                val stroke = GestureDescription.StrokeDescription(clickPath, 0L, 50L)
-                val gesture = GestureDescription.Builder().addStroke(stroke).build()
-                clicked = dispatchGesture(gesture, null, null)
+            }
+        } finally {
+            if (skipButton !== root) {
+                try { skipButton.recycle() } catch (_: Exception) {}
             }
         }
 
@@ -797,16 +866,25 @@ class ShortsBlockerService : AccessibilityService() {
         var p = node.parent
         var depth = 0
         while (p != null && depth < 4) {
-            if (p.isClickable && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            val isClickable = p.isClickable
+            val success = if (isClickable) p.performAction(AccessibilityNodeInfo.ACTION_CLICK) else false
+            val nextP = p.parent
+            try { p.recycle() } catch (_: Exception) {}
+            if (success) {
+                try { nextP?.recycle() } catch (_: Exception) {}
                 return true
             }
-            p = p.parent
+            p = nextP
             depth++
         }
         // Also check if any immediate child is clickable (e.g. wrapper layout around a button)
-        for (i in 0 until node.childCount) {
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
-            if (child.isClickable && child.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            val isClickable = child.isClickable
+            val success = if (isClickable) child.performAction(AccessibilityNodeInfo.ACTION_CLICK) else false
+            try { child.recycle() } catch (_: Exception) {}
+            if (success) {
                 return true
             }
         }
@@ -816,9 +894,11 @@ class ShortsBlockerService : AccessibilityService() {
     private fun findClickableNodeMatchingKeywords(
         node: AccessibilityNodeInfo,
         keywords: List<String>,
-        depth: Int = 0
+        depth: Int = 0,
+        visitedCount: IntArray = IntArray(1)
     ): AccessibilityNodeInfo? {
-        if (depth > 12) return null
+        if (depth > 10 || visitedCount[0] > 80) return null
+        visitedCount[0]++
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase()?.trim() ?: ""
@@ -831,20 +911,26 @@ class ShortsBlockerService : AccessibilityService() {
         }
 
         if (matches) {
-            // Return this node as candidate (clickNodeOrParent will resolve clickability)
             return node
         }
 
-        for (i in 0 until node.childCount) {
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
-            val found = findClickableNodeMatchingKeywords(child, keywords, depth + 1)
+            val found = findClickableNodeMatchingKeywords(child, keywords, depth + 1, visitedCount)
             if (found != null) return found
+            try { child.recycle() } catch (_: Exception) {}
         }
         return null
     }
 
-    private fun findBrowserUrlOrKeywords(node: AccessibilityNodeInfo, depth: Int = 0): String? {
-        if (depth > 8) return null
+    private fun findBrowserUrlOrKeywords(
+        node: AccessibilityNodeInfo,
+        depth: Int = 0,
+        visitedCount: IntArray = IntArray(1)
+    ): String? {
+        if (depth > 8 || visitedCount[0] > 60) return null
+        visitedCount[0]++
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase() ?: ""
@@ -862,9 +948,11 @@ class ShortsBlockerService : AccessibilityService() {
             return text.ifBlank { desc }
         }
 
-        for (i in 0 until node.childCount) {
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
-            val found = findBrowserUrlOrKeywords(child, depth + 1)
+            val found = findBrowserUrlOrKeywords(child, depth + 1, visitedCount)
+            try { child.recycle() } catch (_: Exception) {}
             if (found != null) return found
         }
         return null
@@ -882,8 +970,7 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     private fun showAppLimitToast(appName: String, limitMinutes: Int) {
-        val showToast = prefs.getBoolean(PREF_SHOW_BLOCK_TOAST, false)
-        if (!showToast) return
+        if (!cachedShowToast) return
 
         val now = SystemClock.elapsedRealtime()
         if (now - lastToastTimestamp < 2500L) return
@@ -899,8 +986,7 @@ class ShortsBlockerService : AccessibilityService() {
     }
 
     private fun showShortsLimitToast(shortLabel: String, limitMinutes: Int) {
-        val showToast = prefs.getBoolean(PREF_SHOW_BLOCK_TOAST, false)
-        if (!showToast) return
+        if (!cachedShowToast) return
 
         val now = SystemClock.elapsedRealtime()
         if (now - lastToastTimestamp < 2500L) return
@@ -1061,8 +1147,13 @@ class ShortsBlockerService : AccessibilityService() {
         return findAndClickFacebookHomeNode(root, depth = 0)
     }
 
-    private fun findAndClickFacebookHomeNode(node: AccessibilityNodeInfo, depth: Int): Boolean {
-        if (depth > 14) return false
+    private fun findAndClickFacebookHomeNode(
+        node: AccessibilityNodeInfo,
+        depth: Int,
+        visitedCount: IntArray = IntArray(1)
+    ): Boolean {
+        if (depth > 12 || visitedCount[0] > 70) return false
+        visitedCount[0]++
 
         val desc = node.contentDescription?.toString()?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase() ?: ""
@@ -1079,14 +1170,19 @@ class ShortsBlockerService : AccessibilityService() {
                 return true
             }
             val parent = node.parent
-            if (parent != null && parent.isClickable && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                return true
+            if (parent != null) {
+                val clicked = parent.isClickable && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                try { parent.recycle() } catch (_: Exception) {}
+                if (clicked) return true
             }
         }
 
-        for (i in 0 until node.childCount) {
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
-            if (findAndClickFacebookHomeNode(child, depth + 1)) {
+            val found = findAndClickFacebookHomeNode(child, depth + 1, visitedCount)
+            try { child.recycle() } catch (_: Exception) {}
+            if (found) {
                 return true
             }
         }
@@ -1098,8 +1194,13 @@ class ShortsBlockerService : AccessibilityService() {
         return findAndClickHomeNode(root, depth = 0)
     }
 
-    private fun findAndClickHomeNode(node: AccessibilityNodeInfo, depth: Int): Boolean {
-        if (depth > 14) return false
+    private fun findAndClickHomeNode(
+        node: AccessibilityNodeInfo,
+        depth: Int,
+        visitedCount: IntArray = IntArray(1)
+    ): Boolean {
+        if (depth > 12 || visitedCount[0] > 70) return false
+        visitedCount[0]++
 
         val desc = node.contentDescription?.toString()?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase() ?: ""
@@ -1115,8 +1216,10 @@ class ShortsBlockerService : AccessibilityService() {
                 return true
             }
             val parent = node.parent
-            if (parent != null && parent.isClickable && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                return true
+            if (parent != null) {
+                val clicked = parent.isClickable && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                try { parent.recycle() } catch (_: Exception) {}
+                if (clicked) return true
             }
         }
 
@@ -1124,21 +1227,31 @@ class ShortsBlockerService : AccessibilityService() {
         if (viewId.contains("pivot_bar") && node.childCount > 0) {
             val firstTab = node.getChild(0)
             if (firstTab != null) {
-                if (firstTab.isClickable && firstTab.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                val tabClicked = firstTab.isClickable && firstTab.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (tabClicked) {
+                    try { firstTab.recycle() } catch (_: Exception) {}
                     return true
                 }
-                for (j in 0 until firstTab.childCount) {
+                val subCount = firstTab.childCount
+                for (j in 0 until subCount) {
                     val sub = firstTab.getChild(j) ?: continue
-                    if (sub.isClickable && sub.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    val subClicked = sub.isClickable && sub.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    try { sub.recycle() } catch (_: Exception) {}
+                    if (subClicked) {
+                        try { firstTab.recycle() } catch (_: Exception) {}
                         return true
                     }
                 }
+                try { firstTab.recycle() } catch (_: Exception) {}
             }
         }
 
-        for (i in 0 until node.childCount) {
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
-            if (findAndClickHomeNode(child, depth + 1)) {
+            val found = findAndClickHomeNode(child, depth + 1, visitedCount)
+            try { child.recycle() } catch (_: Exception) {}
+            if (found) {
                 return true
             }
         }
@@ -1162,9 +1275,11 @@ class ShortsBlockerService : AccessibilityService() {
         node: AccessibilityNodeInfo,
         playerIndicators: List<String>,
         textKeywords: List<String> = emptyList(),
-        depth: Int = 0
+        depth: Int = 0,
+        visitedCount: IntArray = IntArray(1)
     ): Boolean {
-        if (depth > 14) return false
+        if (depth > 12 || visitedCount[0] > 70) return false
+        visitedCount[0]++
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val className = node.className?.toString()?.lowercase() ?: ""
@@ -1192,9 +1307,12 @@ class ShortsBlockerService : AccessibilityService() {
             return true
         }
 
-        for (i in 0 until node.childCount) {
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
-            if (hasMatchingPlayerNode(child, playerIndicators, textKeywords, depth + 1)) {
+            val found = hasMatchingPlayerNode(child, playerIndicators, textKeywords, depth + 1, visitedCount)
+            try { child.recycle() } catch (_: Exception) {}
+            if (found) {
                 return true
             }
         }
